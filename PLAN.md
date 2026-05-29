@@ -11,18 +11,18 @@
 
 ## Phase 0 — Project Setup
 
-- [ ] Initialize Python project (`pyproject.toml`, `src/trip_planner/`)
-- [ ] Set up project structure (`api/routes`, `schemas`, `services`, `agents`, `tools`, `models`, `core`)
-- [ ] Configure environment variables with `pydantic-settings`
-- [ ] Set up FastAPI app with health check endpoint
-- [ ] Add `.env.example` with required keys (OpenAI, Tavily, JWT secret, LangSmith)
-- [ ] Add `.gitignore`
-- [ ] Dockerize from the start (`Dockerfile` + `docker-compose.yml` with `postgres:16`)
-- [ ] Add `Makefile` with common commands (up, down, logs, shell, test, lint, migration-up, migration-create)
-- [ ] Add `sqlalchemy[asyncio]`, `asyncpg`, `alembic` to requirements
-- [ ] Create `app/core/database.py` (async engine, session factory, `get_db` dependency)
-- [ ] Init Alembic, configure for async, generate empty first migration
-- [ ] Configure `structlog` for structured logging
+- [x] Initialize Python project (`pyproject.toml`, `src/trip_planner/`)
+- [x] Set up project structure (`api/routes`, `schemas`, `services`, `agents`, `tools`, `models`, `core`)
+- [x] Configure environment variables with `pydantic-settings`
+- [x] Set up FastAPI app with health check endpoint
+- [x] Add `.env.example` with required keys (OpenAI, Tavily, JWT secret, LangSmith)
+- [x] Add `.gitignore`
+- [x] Dockerize from the start (`Dockerfile` + `docker-compose.yml` with `postgres:16`)
+- [x] Add `Makefile` with common commands (up, down, logs, shell, test, lint, migration-up, migration-create)
+- [x] Add `sqlalchemy[asyncio]`, `asyncpg`, `alembic` to requirements
+- [x] Create `app/core/database.py` (async engine, session factory, `get_db` dependency)
+- [x] Init Alembic, configure for async, generate empty first migration
+- [x] Configure `structlog` for structured logging
 
 ## Phase 1 — Auth (JWT, manual)
 
