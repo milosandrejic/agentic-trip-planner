@@ -5,6 +5,15 @@
 
 ---
 
+## Agent Change Rules
+
+- Do not modify files outside the current task unless explicitly approved.
+- Do not refactor unrelated code.
+- Do not introduce new dependencies without asking.
+- Do not change public API contracts unless the plan says so.
+- After implementation, summarize changed files and why each change was needed.
+- If strict typing requires Any or ignores, stop and ask.
+
 ## Variable & Function Naming
 
 ### Good
@@ -188,6 +197,90 @@ current_question: {question}"""
 ```
 
 **Rule:** Name each part of the string. Use f-string on the final assembled result. Reader instantly knows what each piece is.
+
+---
+
+## Type Annotations
+
+**Strict typing is enforced.** Pylance/Pyright runs in `strict` mode. Types are part of the contract — they document intent, catch bugs at author time, and make refactors safe. A reader 34 months from now should see the shape of every value flowing through the system without running the code.
+
+### Rules
+
+1. **Every function signature is fully typed** — parameters and return type. No exceptions.
+2. **No bare `dict`, `list`, `tuple`** — always parameterize: `dict[str, int]`, `list[Chunk]`, etc.
+3. **`Any` is forbidden.** Do not introduce `Any` on your own. If you believe `Any` is the only correct choice (e.g. genuinely untyped third-party return value, dynamic dispatch), **stop and ask** with a written justification of why no other type fits. Approval is required before `Any` enters the codebase.
+4. **Use `TypedDict` for structured dicts that flow between modules** — chunks, LLM results, token usage, history messages, API response shapes. If a dict has a known set of keys, it gets a `TypedDict`.
+5. **Local variables don't need annotations** when the type is obvious from the right-hand side. Annotate only when the inferred type is wrong or the empty-collection case is ambiguous (`history: list[HistoryMessage] = []`).
+6. **Prefer `X | None` over `Optional[X]`** (PEP 604 syntax).
+
+### Good
+
+```python
+from typing import TypedDict
+
+class ChunkMetadata(TypedDict, total=False):
+    source: str
+    page: int
+    chunk_index: int
+
+class Chunk(TypedDict):
+    text: str
+    score: float
+    metadata: ChunkMetadata
+
+class TokenUsage(TypedDict):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+class LLMResult(TypedDict):
+    answer: str
+    usage: TokenUsage
+
+def rerank_chunks(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk]:
+    ...
+
+def generate_answer(
+    context: str,
+    question: str,
+    history: list[HistoryMessage] | None = None,
+) -> LLMResult:
+    ...
+```
+
+### Bad (bare generics, no contract)
+
+```python
+def rerank_chunks(query, chunks, top_k):  # no types at all
+    ...
+
+def generate_answer(context: str, question: str, history: list[dict] | None = None) -> dict:
+    # list[dict] = list[dict[Unknown, Unknown]] in strict mode
+    # Caller has no idea what keys the result has
+    ...
+```
+
+### Where TypedDict belongs in this project
+
+Define shared shapes in `app/services/types.py`:
+
+- `Chunk` / `ChunkMetadata` — output of retrievers and reranker
+- `HistoryMessage` — `{"role": Literal["user", "assistant"], "content": str}`
+- `TokenUsage` — LLM token counts
+- `LLMResult` — `generate_answer` return value
+- `Source` — citation entry returned by `/ask`
+
+Service modules import and use these. Routers reuse the same types — no parallel definitions.
+
+### Escape hatch (for when strict is too much overhead)
+
+If a specific module deals with genuinely dynamic data (e.g. raw JSON from an unknown external API before validation), narrow the relaxation to that module with a file-level pragma:
+
+```python
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
+```
+
+This is preferred over loosening the project-wide config. Strict stays the default; relaxation is local and visible.
 
 ---
 

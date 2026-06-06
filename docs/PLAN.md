@@ -26,7 +26,7 @@
 
 ## Phase 1 — Auth (JWT, manual)
 
-- [ ] Create `User` SQLAlchemy model (`id`, `email`, `hashed_password`, `created_at`)
+- [x] Create `User` SQLAlchemy model (`id`, `email`, `hashed_password`, `first_name`, `last_name`, `country`, `created_at`, `updated_at`)
 - [ ] Alembic migration for `users` table
 - [ ] Build `services/auth_service.py`: bcrypt hashing + JWT encode/decode (HS256, 24h expiry)
 - [ ] Create endpoints: `POST /auth/register`, `POST /auth/login` (returns JWT)
@@ -89,15 +89,15 @@
 
 ## Phase 5 — Travel API Tools
 
-### 5a — Flights (Amadeus Self-Service)
-- [ ] Build `services/amadeus_client.py` — OAuth token refresh, retry, rate limiting
-- [ ] Build `tools/flight_search.py` — Flight Offers Search (origin, dest, dates, pax)
+### 5a — Flights (Duffel)
+- [ ] Build `services/duffel_client.py` — OAuth token refresh, retry, rate limiting
+- [ ] Build `tools/flight_search.py` — Duffel flight search (origin, dest, dates, pax)
 - [ ] Add `api_cache` table for response caching (24h TTL)
 - [ ] Register tool with agent, update prompt to extract origin city
 
-### 5b — Hotels (Amadeus + LiteAPI fallback)
+### 5b — Hotels (LiteAPI)
+- [ ] Build `services/liteapi_client.py` — API key auth, retry, rate limiting
 - [ ] Build `tools/hotel_search.py` — city + dates + pax → top offers
-- [ ] Add LiteAPI as secondary source; merge + dedupe by name
 
 ### 5c — Places / POI (Geoapify + Google Places)
 - [ ] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
