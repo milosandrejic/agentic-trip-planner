@@ -27,9 +27,9 @@
 ## Phase 1 — Auth (JWT, manual)
 
 - [x] Create `User` SQLAlchemy model (`id`, `email`, `hashed_password`, `first_name`, `last_name`, `country`, `created_at`, `updated_at`)
-- [ ] Alembic migration for `users` table
-- [ ] Build `services/auth_service.py`: bcrypt hashing + JWT encode/decode (HS256, 24h expiry)
-- [ ] Create endpoints: `POST /auth/register`, `POST /auth/login` (returns JWT)
+- [x] Alembic migration for `users` table
+- [x] Build `services/auth_service.py`: bcrypt hashing + JWT encode/decode (HS256, 24h expiry)
+- [x] Create endpoints: `POST /auth/register`, `POST /auth/login` (returns JWT)
 - [ ] Build `get_current_user` FastAPI dependency (Bearer token → `User`)
 - [ ] Protect a sample `GET /me` endpoint
 - [ ] Tests for register / login / invalid-token

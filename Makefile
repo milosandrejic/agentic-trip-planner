@@ -38,7 +38,7 @@ migration-create:
 	docker compose exec app alembic revision --autogenerate -m "$(m)"
 
 install:
-	pip install -e ".[dev]"
+	pip3 install -e ".[dev]"
 
 dev:
 	uvicorn trip_planner.main:app --reload --host 0.0.0.0 --port 8000
