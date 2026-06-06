@@ -16,28 +16,30 @@ _bearer = HTTPBearer()
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 BearerToken = Annotated[HTTPAuthorizationCredentials, Depends(_bearer)]
 
+_credentials_error = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Invalid or expired token",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
-async def get_current_user(credentials: BearerToken, db: DbSession) -> User:
-    """Resolve a Bearer JWT to the authenticated User.
 
-    Raises 401 if the token is missing, invalid, expired, or the user no longer exists.
-    """
-    credentials_error = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or expired token",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
+async def require_token(credentials: BearerToken) -> str:
+    """Validate JWT signature and expiry. Returns user_id str. No DB hit."""
     try:
-        user_id_str = decode_access_token(credentials.credentials)
+        return decode_access_token(credentials.credentials)
     except jwt.InvalidTokenError:
-        raise credentials_error
+        raise _credentials_error
 
-    user_id = uuid.UUID(user_id_str)
-    user = await user_repository.get_user_by_id(db, user_id)
+
+ValidatedUserId = Annotated[str, Depends(require_token)]
+
+
+async def get_current_user(user_id: ValidatedUserId, db: DbSession) -> User:
+    """Fetch the User for an already-validated token. Raises 401 if user no longer exists."""
+    user = await user_repository.get_user_by_id(db, uuid.UUID(user_id))
 
     if user is None:
-        raise credentials_error
+        raise _credentials_error
 
     return user
 

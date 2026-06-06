@@ -31,8 +31,8 @@
 - [x] Build `services/auth_service.py`: bcrypt hashing + JWT encode/decode (HS256, 24h expiry)
 - [x] Create endpoints: `POST /auth/register`, `POST /auth/login` (returns JWT)
 - [x] Build `get_current_user` FastAPI dependency (Bearer token → `User`)
-- [ ] Protect a sample `GET /me` endpoint
-- [ ] Tests for register / login / invalid-token
+- [x] Protect a sample `GET /me` endpoint
+- [x] Tests for register / login / invalid-token
 
 ---
 
