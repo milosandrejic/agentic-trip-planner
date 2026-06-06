@@ -30,7 +30,7 @@
 - [x] Alembic migration for `users` table
 - [x] Build `services/auth_service.py`: bcrypt hashing + JWT encode/decode (HS256, 24h expiry)
 - [x] Create endpoints: `POST /auth/register`, `POST /auth/login` (returns JWT)
-- [ ] Build `get_current_user` FastAPI dependency (Bearer token → `User`)
+- [x] Build `get_current_user` FastAPI dependency (Bearer token → `User`)
 - [ ] Protect a sample `GET /me` endpoint
 - [ ] Tests for register / login / invalid-token
 

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from trip_planner.api.routes import auth, health
+from trip_planner.api.routes import auth, health, users
 from trip_planner.config import get_settings
 from trip_planner.logging_config import configure_logging, get_logger
 
@@ -27,3 +27,4 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(users.router)
