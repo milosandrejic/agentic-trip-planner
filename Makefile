@@ -1,7 +1,10 @@
-.PHONY: up down logs shell test lint format migration-up migration-down migration-create install dev
+.PHONY: up down logs shell test test-cov lint format migration-up migration-down migration-create install dev
 
 up:
 	docker compose up --build -d
+
+build:
+	docker compose up --build
 
 down:
 	docker compose down
@@ -14,6 +17,9 @@ shell:
 
 test:
 	docker compose exec app pytest -v
+
+test-cov:
+	docker compose exec app pytest -v --cov=trip_planner --cov-report=term-missing --cov-fail-under=90
 
 lint:
 	docker compose exec app ruff check src tests

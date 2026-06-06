@@ -3,7 +3,7 @@
 Production-style agentic trip planner backend built with **FastAPI** and **LangGraph**.
 Personal project — building gradually to learn agentic AI concepts.
 
-See [PLAN.md](PLAN.md) for the phased roadmap.
+See [PLAN.md](docs/PLAN.md) for the phased roadmap.
 
 ## Stack
 
