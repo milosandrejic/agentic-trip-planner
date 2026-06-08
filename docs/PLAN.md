@@ -46,7 +46,7 @@
 - [x] Write system prompt: "You are a trip planner. Ask clarifying questions if needed."
 - [x] Create `POST /trips/plan` endpoint (auth-required): body `{query: str}` → invokes graph
 - [x] Wire LangSmith env vars, confirm trace appears in dashboard
-- [ ] Test end-to-end: "Paris 7 days for 2" returns coherent text
+- [x] Test end-to-end: "Paris 7 days for 2" returns coherent text
 
 ## Phase 3 — Tools + ReAct Loop
 
