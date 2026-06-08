@@ -1,15 +1,26 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from trip_planner.api.routes import auth, health, users
+from trip_planner.api.routes import auth, health, trips, users
 from trip_planner.config import get_settings
 from trip_planner.logging_config import configure_logging, get_logger
 
 settings = get_settings()
 configure_logging(settings.log_level)
 log = get_logger(__name__)
+
+
+def _configure_langsmith() -> None:
+    if settings.langsmith_tracing and settings.langsmith_api_key:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
+        os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
+
+
+_configure_langsmith()
 
 
 @asynccontextmanager
@@ -28,3 +39,4 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(trips.router)

@@ -40,12 +40,12 @@
 
 ## Phase 2 — Minimal LangGraph Agent (no tools)
 
-- [ ] Add `langgraph`, `langchain-openai`, `langsmith` to requirements
-- [ ] Build `agents/state.py` — `TripPlannerState` TypedDict (`messages`, `trip_request`, `draft_itinerary`)
-- [ ] Build `agents/graph.py` — one-node graph: `chat_node` calls `gpt-4o-mini`, returns free text
-- [ ] Write system prompt: "You are a trip planner. Ask clarifying questions if needed."
-- [ ] Create `POST /trips/plan` endpoint (auth-required): body `{query: str}` → invokes graph
-- [ ] Wire LangSmith env vars, confirm trace appears in dashboard
+- [x] Add `langgraph`, `langchain-openai`, `langsmith` to requirements
+- [x] Build `agents/state.py` — `TripPlannerState` TypedDict (`messages`, `trip_request`, `draft_itinerary`)
+- [x] Build `agents/graph.py` — one-node graph: `chat_node` calls `gpt-4o-mini`, returns free text
+- [x] Write system prompt: "You are a trip planner. Ask clarifying questions if needed."
+- [x] Create `POST /trips/plan` endpoint (auth-required): body `{query: str}` → invokes graph
+- [x] Wire LangSmith env vars, confirm trace appears in dashboard
 - [ ] Test end-to-end: "Paris 7 days for 2" returns coherent text
 
 ## Phase 3 — Tools + ReAct Loop
