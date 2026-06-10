@@ -1,6 +1,6 @@
 from langchain_core.messages import HumanMessage
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
 from trip_planner.agents.graph import run_planner
 from trip_planner.agents.state import TripPlannerState
@@ -20,4 +20,11 @@ async def plan_trip(body: TripPlanRequest, _current_user: CurrentUser) -> TripPl
 
     result = await run_planner(initial_state)
 
-    return TripPlanResponse(itinerary=result["draft_itinerary"])
+    itinerary = result.get("itinerary")
+    if itinerary is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Graph did not produce a structured itinerary",
+        )
+
+    return TripPlanResponse(itinerary=itinerary)

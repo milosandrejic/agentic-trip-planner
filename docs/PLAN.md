@@ -50,15 +50,15 @@
 
 ## Phase 3 — Tools + ReAct Loop
 
-- [ ] Build `tools/web_search.py` — Tavily wrapper (`langchain-tavily`), top-5 results
-- [ ] Build `tools/weather.py` — Open-Meteo wrapper (geocoding + forecast for date range)
-- [ ] Convert graph to ReAct pattern: `agent_node` (LLM with `bind_tools`) ↔ `ToolNode`
-- [ ] Add conditional edge with `tools_condition` to loop until LLM emits final answer
-- [ ] Update system prompt: use `web_search` for current info, `weather` for forecasts, cite sources
-- [ ] Define Pydantic output schemas: `Itinerary`, `DayPlan`, `Activity`, `Source`
-- [ ] Final node forces structured output via `with_structured_output(Itinerary)`
-- [ ] Update `POST /trips/plan` to return `Itinerary` JSON
-- [ ] Tests with mocked tool responses (golden snapshot for Paris-7-day request)
+- [x] Build `tools/web_search.py` — Tavily wrapper (`langchain-tavily`), top-5 results
+- [x] Build `tools/weather.py` — Open-Meteo wrapper (geocoding + forecast for date range)
+- [x] Convert graph to ReAct pattern: `agent_node` (LLM with `bind_tools`) ↔ `ToolNode`
+- [x] Add conditional edge with `tools_condition` to loop until LLM emits final answer
+- [x] Update system prompt: use `web_search` for current info, `weather` for forecasts, cite sources
+- [x] Define Pydantic output schemas: `Itinerary`, `DayPlan`, `Activity`, `Source`
+- [x] Final node forces structured output via `with_structured_output(Itinerary)`
+- [x] Update `POST /trips/plan` to return `Itinerary` JSON
+- [x] Tests with mocked tool responses (golden snapshot for Paris-7-day request)
 
 ## Phase 4 — Memory & Multi-turn
 

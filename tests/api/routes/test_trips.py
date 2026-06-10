@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from langchain_core.messages import AIMessage, HumanMessage
 
 from trip_planner.agents.state import TripPlannerState
+from trip_planner.schemas.trips import Activity, DayPlan, Itinerary, Source
 from trip_planner.services.auth_service import create_access_token
 
 
@@ -21,11 +22,24 @@ def make_mock_user(user_id: uuid.UUID | None = None) -> MagicMock:
     return user
 
 
-def make_plan_result(itinerary: str = "Day 1: Arrive in Paris...") -> TripPlannerState:
+def make_itinerary(destination: str = "Paris") -> Itinerary:
+    activity = Activity(time="Morning", description="Visit the Eiffel Tower")
+    day = DayPlan(day=1, location=destination, activities=[activity])
+    return Itinerary(
+        destination=destination,
+        total_days=1,
+        summary=f"A wonderful trip to {destination}.",
+        days=[day],
+    )
+
+
+def make_plan_result(itinerary: Itinerary | None = None) -> TripPlannerState:
+    resolved = itinerary or make_itinerary()
     return TripPlannerState(
-        messages=[HumanMessage(content="Paris 7 days"), AIMessage(content=itinerary)],
+        messages=[HumanMessage(content="Paris 7 days"), AIMessage(content="Here is your itinerary.")],
         trip_request="Paris 7 days",
-        draft_itinerary=itinerary,
+        draft_itinerary="",
+        itinerary=resolved,
     )
 
 
@@ -35,7 +49,8 @@ def make_plan_result(itinerary: str = "Day 1: Arrive in Paris...") -> TripPlanne
 async def test_plan_trip_returns_200_with_itinerary(db_client: AsyncClient) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
-    result = make_plan_result("Day 1: Arrive in Paris and check in.")
+    itinerary = make_itinerary("Paris")
+    result = make_plan_result(itinerary)
 
     with (
         patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
@@ -53,7 +68,35 @@ async def test_plan_trip_returns_200_with_itinerary(db_client: AsyncClient) -> N
     assert response.status_code == 200
 
     body = response.json()
-    assert body["itinerary"] == "Day 1: Arrive in Paris and check in."
+    assert body["itinerary"]["destination"] == "Paris"
+    assert body["itinerary"]["total_days"] == 1
+    assert len(body["itinerary"]["days"]) == 1
+    assert body["itinerary"]["days"][0]["activities"][0]["description"] == "Visit the Eiffel Tower"
+
+
+async def test_plan_trip_returns_200_with_sources(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    source = Source(title="Paris Travel Guide", url="https://example.com/paris")
+    itinerary = make_itinerary("Paris")
+    itinerary.sources.append(source)
+    result = make_plan_result(itinerary)
+
+    with (
+        patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
+        patch("trip_planner.api.routes.trips.run_planner", new_callable=AsyncMock) as mock_planner,
+    ):
+        mock_user.return_value = user
+        mock_planner.return_value = result
+
+        response = await db_client.post(
+            "/trips/plan",
+            json={"query": "Plan a 7-day Paris trip for 2 people"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["itinerary"]["sources"][0]["url"] == "https://example.com/paris"
 
 
 async def test_plan_trip_returns_401_without_token(db_client: AsyncClient) -> None:
@@ -96,7 +139,7 @@ async def test_plan_trip_passes_query_to_planner(db_client: AsyncClient) -> None
     user = make_mock_user()
     token = create_access_token(str(user.id))
     query = "Plan a 7-day Paris trip for 2 people"
-    result = make_plan_result("Day 1: Arrive in Paris.")
+    result = make_plan_result()
 
     with (
         patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
@@ -115,3 +158,28 @@ async def test_plan_trip_passes_query_to_planner(db_client: AsyncClient) -> None
     assert called_state["trip_request"] == query
     assert called_state["draft_itinerary"] == ""
     assert called_state["messages"][0].content == query
+
+
+async def test_plan_trip_raises_500_when_graph_returns_no_itinerary(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    empty_result = TripPlannerState(
+        messages=[],
+        trip_request="Paris 7 days",
+        draft_itinerary="",
+    )
+
+    with (
+        patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
+        patch("trip_planner.api.routes.trips.run_planner", new_callable=AsyncMock) as mock_planner,
+    ):
+        mock_user.return_value = user
+        mock_planner.return_value = empty_result
+
+        response = await db_client.post(
+            "/trips/plan",
+            json={"query": "Plan a 7-day Paris trip for 2 people"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 500

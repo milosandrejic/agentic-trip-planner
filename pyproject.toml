@@ -18,6 +18,8 @@ dependencies = [
     "langgraph>=0.3",
     "langchain-openai>=0.3",
     "langsmith>=0.3",
+    "langchain-tavily>=0.1",
+    "httpx>=0.28",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +27,6 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
-    "httpx>=0.28",
     "ruff>=0.8",
     "pyright>=1.1.390",
 ]
