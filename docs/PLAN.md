@@ -64,9 +64,10 @@
 
 - [x] Add `langgraph-checkpoint-postgres`, run its setup migration
 - [x] Wire `AsyncPostgresSaver` as the graph's checkpointer
-- [ ] Rename `TripSession` → `Thread` model (`id`, `user_id` FK, `thread_id` UNIQUE, `title`, `created_at`, `updated_at`)
-- [ ] Create `Message` model (`id`, `thread_id` FK → `threads.thread_id`, `role`, `content`, `itinerary` JSONB nullable, `created_at`)
-- [ ] Alembic: roll back `trip_sessions`, replace with `threads` + `messages` tables
+- [x] Create `Thread` model (`id` UUID PK, `user_id` FK, `slug` UNIQUE, `title`, `deleted_at`, timestamps)
+- [x] Create `Message` model (`id`, `thread_id` UUID FK → `threads.id`, `role`, `content`, `itinerary` JSONB nullable, `deleted_at`, `created_at`)
+- [x] Add `is_active` to `User` model
+- [x] Alembic migrations: `threads`, `messages`, `users.is_active`
 - [ ] `thread_repository` — `create`, `get_by_thread_id`, `list_by_user`, `delete`
 - [ ] `message_repository` — `create`, `list_by_thread_id` (cursor paginated by `created_at`)
 - [ ] Create endpoints:
