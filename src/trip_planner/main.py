@@ -1,9 +1,12 @@
+# pyright: reportMissingTypeStubs=false
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+from trip_planner.agents.graph import init_graph
 from trip_planner.api.routes import auth, health, trips, users
 from trip_planner.config import get_settings
 from trip_planner.logging_config import configure_logging, get_logger
@@ -25,8 +28,11 @@ _configure_langsmith()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    log.info("app.startup", env=settings.app_env)
-    yield
+    async with AsyncPostgresSaver.from_conn_string(settings.checkpoint_db_url) as checkpointer:
+        await checkpointer.setup()
+        init_graph(checkpointer)
+        log.info("app.startup", env=settings.app_env)
+        yield
     log.info("app.shutdown")
 
 

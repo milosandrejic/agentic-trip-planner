@@ -62,18 +62,21 @@
 
 ## Phase 4 — Memory & Multi-turn
 
-- [ ] Add `langgraph-checkpoint-postgres`, run its setup migration
-- [ ] Wire `AsyncPostgresSaver` as the graph's checkpointer
-- [ ] Create `TripSession` model (`id`, `user_id` FK, `thread_id`, `title`, `created_at`, `updated_at`)
-- [ ] Alembic migration for `trip_sessions`
+- [x] Add `langgraph-checkpoint-postgres`, run its setup migration
+- [x] Wire `AsyncPostgresSaver` as the graph's checkpointer
+- [ ] Rename `TripSession` → `Thread` model (`id`, `user_id` FK, `thread_id` UNIQUE, `title`, `created_at`, `updated_at`)
+- [ ] Create `Message` model (`id`, `thread_id` FK → `threads.thread_id`, `role`, `content`, `itinerary` JSONB nullable, `created_at`)
+- [ ] Alembic: roll back `trip_sessions`, replace with `threads` + `messages` tables
+- [ ] `thread_repository` — `create`, `get_by_thread_id`, `list_by_user`, `delete`
+- [ ] `message_repository` — `create`, `list_by_thread_id` (cursor paginated by `created_at`)
 - [ ] Create endpoints:
-  - `POST /trips` — create new session, returns `thread_id`
-  - `POST /trips/{thread_id}/messages` — send follow-up; reuses checkpointed state
-  - `GET /trips` — list current user's trips
-  - `GET /trips/{thread_id}` — full message history + latest itinerary snapshot
-  - `DELETE /trips/{thread_id}`
-- [ ] Ownership check on `thread_id` (403 on cross-user access)
-- [ ] Test conversational refinement: "make day 3 about museums" updates only day 3
+  - `POST /threads` — create thread, invoke graph, persist messages, return `{thread_id, itinerary}`
+  - `POST /threads/{thread_id}/messages` — append message, reinvoke graph, return `{itinerary}`
+  - `GET /threads` — list current user's threads
+  - `GET /threads/{thread_id}` — paginated message history + latest itinerary
+  - `DELETE /threads/{thread_id}`
+- [ ] Ownership check on `thread_id` — 403 if `thread.user_id != current_user.id`
+- [ ] Tests: thread CRUD, 403 cross-user, multi-turn refinement, pagination
 
 ## Phase 4.5 — Clarifying Questions
 

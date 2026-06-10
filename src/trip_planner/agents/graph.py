@@ -1,8 +1,11 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
+import uuid
 from typing import Literal, cast
 
 from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
@@ -81,7 +84,18 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
     )
 
 
-def build_graph() -> CompiledStateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState]:
+_compiled_graph: CompiledStateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState] | None = None
+
+
+def init_graph(checkpointer: BaseCheckpointSaver) -> None:  # type: ignore[type-arg]
+    """Compile the graph with the given checkpointer and store it module-wide."""
+    global _compiled_graph
+    _compiled_graph = build_graph(checkpointer=checkpointer)
+
+
+def build_graph(
+    checkpointer: BaseCheckpointSaver | None = None,  # type: ignore[type-arg]
+) -> CompiledStateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState]:
     """Build and compile the ReAct trip planner graph."""
     graph: StateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState] = StateGraph(TripPlannerState)
 
@@ -94,14 +108,18 @@ def build_graph() -> CompiledStateGraph[TripPlannerState, None, TripPlannerState
     graph.add_edge("tools", "reason")
     graph.add_edge("format", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
-graph = build_graph()
+async def run_planner(state: TripPlannerState, thread_id: str | None = None) -> TripPlannerState:
+    """Invoke the compiled graph with an optional thread_id for checkpointed state."""
+    compiled = _compiled_graph
 
+    if compiled is None:
+        raise RuntimeError("Graph has not been initialized — call init_graph() at startup.")
 
-async def run_planner(initial_state: TripPlannerState) -> TripPlannerState:
-    """Invoke the compiled graph and return the final state."""
-    result = await graph.ainvoke(initial_state)
+    resolved_thread_id = thread_id or str(uuid.uuid4())
+    config = RunnableConfig(configurable={"thread_id": resolved_thread_id})
+    result = await compiled.ainvoke(state, config)
     return cast(TripPlannerState, result)
 

@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     langsmith_api_key: str = ""
     langsmith_project: str = "agentic-trip-planner"
 
+    @property
+    def checkpoint_db_url(self) -> str:
+        """psycopg3-compatible connection URL for the LangGraph checkpoint saver."""
+        return self.database_url.replace("postgresql+asyncpg://", "postgresql://")
+
 
 @lru_cache
 def get_settings() -> Settings:
