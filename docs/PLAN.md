@@ -68,16 +68,16 @@
 - [x] Create `Message` model (`id`, `thread_id` UUID FK → `threads.id`, `role`, `content`, `itinerary` JSONB nullable, `deleted_at`, `created_at`)
 - [x] Add `is_active` to `User` model
 - [x] Alembic migrations: `threads`, `messages`, `users.is_active`
-- [ ] `thread_repository` — `create`, `get_by_thread_id`, `list_by_user`, `delete`
-- [ ] `message_repository` — `create`, `list_by_thread_id` (cursor paginated by `created_at`)
-- [ ] Create endpoints:
+- [x] `thread_repository` — `create`, `get_by_thread_id`, `list_by_user`, `delete`
+- [x] `message_repository` — `create`, `list_by_thread_id` (cursor paginated by `created_at`)
+- [x] Create endpoints:
   - `POST /threads` — create thread, invoke graph, persist messages, return `{thread_id, itinerary}`
   - `POST /threads/{thread_id}/messages` — append message, reinvoke graph, return `{itinerary}`
   - `GET /threads` — list current user's threads
   - `GET /threads/{thread_id}` — paginated message history + latest itinerary
   - `DELETE /threads/{thread_id}`
-- [ ] Ownership check on `thread_id` — 403 if `thread.user_id != current_user.id`
-- [ ] Tests: thread CRUD, 403 cross-user, multi-turn refinement, pagination
+- [x] Ownership check on `thread_id` — 403 if `thread.user_id != current_user.id`
+- [x] Tests: thread CRUD, 403 cross-user, multi-turn refinement, pagination
 
 ## Phase 4.5 — Clarifying Questions
 

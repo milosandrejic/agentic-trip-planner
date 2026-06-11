@@ -1,11 +1,11 @@
-# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false
 import uuid
 from typing import Literal, cast
 
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
@@ -87,14 +87,14 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
 _compiled_graph: CompiledStateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState] | None = None
 
 
-def init_graph(checkpointer: BaseCheckpointSaver) -> None:  # type: ignore[type-arg]
+def init_graph(checkpointer: AsyncPostgresSaver) -> None:
     """Compile the graph with the given checkpointer and store it module-wide."""
     global _compiled_graph
     _compiled_graph = build_graph(checkpointer=checkpointer)
 
 
 def build_graph(
-    checkpointer: BaseCheckpointSaver | None = None,  # type: ignore[type-arg]
+    checkpointer: AsyncPostgresSaver | None = None,
 ) -> CompiledStateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState]:
     """Build and compile the ReAct trip planner graph."""
     graph: StateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState] = StateGraph(TripPlannerState)

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from trip_planner.agents.graph import init_graph
-from trip_planner.api.routes import auth, health, trips, users
+from trip_planner.api.routes import auth, health, threads, trips, users
 from trip_planner.config import get_settings
 from trip_planner.logging_config import configure_logging, get_logger
 
@@ -46,3 +46,4 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(trips.router)
+app.include_router(threads.router)
