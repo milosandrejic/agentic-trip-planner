@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 
 
@@ -30,13 +32,26 @@ class MessageOut(BaseModel):
     created_at: datetime
 
 
+class ItineraryResult(BaseModel):
+    type: Literal["itinerary"] = "itinerary"
+    itinerary: Itinerary
+
+
+class ClarificationResult(BaseModel):
+    type: Literal["clarification"] = "clarification"
+    clarification: ClarificationRequest
+
+
+PlannerResult = Annotated[ItineraryResult | ClarificationResult, Field(discriminator="type")]
+
+
 class CreateThreadResponse(BaseModel):
     thread: ThreadSummary
-    itinerary: Itinerary
+    result: PlannerResult
 
 
 class SendMessageResponse(BaseModel):
-    itinerary: Itinerary
+    result: PlannerResult
 
 
 class ThreadListResponse(BaseModel):

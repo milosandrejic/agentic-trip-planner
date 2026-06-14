@@ -14,6 +14,8 @@ from trip_planner.repositories import message_repository, thread_repository
 from trip_planner.schemas.threads import (
     CreateThreadRequest,
     CreateThreadResponse,
+    ClarificationResult,
+    ItineraryResult,
     MessageOut,
     SendMessageRequest,
     SendMessageResponse,
@@ -29,7 +31,7 @@ _not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread
 _forbidden = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 _graph_error = HTTPException(
     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    detail="Graph did not produce a structured itinerary",
+    detail="Graph did not produce a structured itinerary or clarification",
 )
 
 def _make_slug(text: str) -> str:
@@ -82,14 +84,26 @@ async def create_thread(
     )
     result = await run_planner(initial_state, thread_id=str(thread.id))
 
+    clarification = result.get("clarification")
     itinerary = result.get("itinerary")
-
-    if itinerary is None:
-        raise _graph_error
 
     await message_repository.create_message(
         db, thread_id=thread.id, role="human", content=body.query
     )
+
+    if clarification is not None:
+        await message_repository.create_message(
+            db, thread_id=thread.id, role="assistant", content=clarification.message
+        )
+        await db.commit()
+        return CreateThreadResponse(
+            thread=_to_thread_summary(thread),
+            result=ClarificationResult(clarification=clarification),
+        )
+
+    if itinerary is None:
+        raise _graph_error
+
     await message_repository.create_message(
         db,
         thread_id=thread.id,
@@ -100,7 +114,10 @@ async def create_thread(
 
     await db.commit()
 
-    return CreateThreadResponse(thread=_to_thread_summary(thread), itinerary=itinerary)
+    return CreateThreadResponse(
+        thread=_to_thread_summary(thread),
+        result=ItineraryResult(itinerary=itinerary),
+    )
 
 @router.post(
     "/{thread_id}/messages",
@@ -132,14 +149,24 @@ async def send_message(
 
     result = await run_planner(follow_up_state, thread_id=str(thread.id))
 
+    clarification = result.get("clarification")
     itinerary = result.get("itinerary")
-
-    if itinerary is None:
-        raise _graph_error
 
     await message_repository.create_message(
         db, thread_id=thread.id, role="human", content=body.query
     )
+
+    if clarification is not None:
+        await message_repository.create_message(
+            db, thread_id=thread.id, role="assistant", content=clarification.message
+        )
+        thread.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        return SendMessageResponse(result=ClarificationResult(clarification=clarification))
+
+    if itinerary is None:
+        raise _graph_error
+
     await message_repository.create_message(
         db,
         thread_id=thread.id,
@@ -152,7 +179,7 @@ async def send_message(
 
     await db.commit()
 
-    return SendMessageResponse(itinerary=itinerary)
+    return SendMessageResponse(result=ItineraryResult(itinerary=itinerary))
 
 @router.get("", response_model=ThreadListResponse, status_code=status.HTTP_200_OK)
 async def list_threads(

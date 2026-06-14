@@ -5,6 +5,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
+from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 
 
@@ -13,3 +14,4 @@ class TripPlannerState(TypedDict):
     trip_request: str
     draft_itinerary: str
     itinerary: NotRequired[Itinerary | None]
+    clarification: NotRequired[ClarificationRequest | None]

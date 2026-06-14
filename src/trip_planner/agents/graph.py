@@ -2,22 +2,33 @@
 import uuid
 from typing import Literal, cast
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
-from pydantic import SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from trip_planner.agents.state import TripPlannerState
 from trip_planner.config import get_settings
+from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 from trip_planner.tools.web_search import web_search_tool
 from trip_planner.tools.weather import weather_tool
 
 _TOOLS = [web_search_tool, weather_tool]
+
+_TRIAGE_PROMPT = (
+    "You are assessing whether a trip planning request has enough information to proceed. "
+    "A request is ready to plan if it includes at minimum: a destination and an approximate duration or travel dates. "
+    "If the request is missing critical information, set should_clarify=true and provide a friendly, "
+    "conversational message asking for what is needed. "
+    "List the missing fields by their machine-readable names "
+    "(e.g. 'destination', 'travel_dates', 'duration', 'budget', 'traveler_count'). "
+    "If the request has enough to plan, set should_clarify=false and leave clarification as null."
+)
 
 _SYSTEM_PROMPT = (
     "You are an expert trip planner. "
@@ -45,6 +56,25 @@ _llm_with_tools = _llm.bind_tools(_TOOLS)
 _llm_structured = _llm.with_structured_output(Itinerary)
 
 
+class _TriageDecision(BaseModel):
+    should_clarify: bool = Field(
+        description="True if the trip request is missing critical information to plan a trip."
+    )
+    clarification: ClarificationRequest | None = Field(
+        default=None,
+        description="Required when should_clarify is True. Must be null otherwise.",
+    )
+
+
+_llm_triage = _llm.with_structured_output(_TriageDecision)
+
+
+def _route_after_triage(state: TripPlannerState) -> Literal["reason", "__end__"]:
+    """Route to reason if the request is complete, or end with a clarification response."""
+    has_clarification = state.get("clarification") is not None
+    return "__end__" if has_clarification else "reason"
+
+
 def _route_after_reason(state: TripPlannerState) -> Literal["tools", "format"]:
     """Route to tools if the last message has pending tool calls, else to format."""
     last_message = state["messages"][-1]
@@ -53,6 +83,23 @@ def _route_after_reason(state: TripPlannerState) -> Literal["tools", "format"]:
     has_pending_tool_calls = is_ai_message and bool(last_message.tool_calls)
 
     return "tools" if has_pending_tool_calls else "format"
+
+
+async def triage_node(state: TripPlannerState) -> TripPlannerState:
+    """Assess completeness of the trip request and decide whether to plan or ask for clarification."""
+    triage_message = SystemMessage(content=_TRIAGE_PROMPT)
+    user_request = HumanMessage(content=state["trip_request"])
+
+    decision = cast(_TriageDecision, await _llm_triage.ainvoke([triage_message, user_request]))
+
+    clarification = decision.clarification if decision.should_clarify else None
+
+    return TripPlannerState(
+        messages=[],
+        trip_request=state["trip_request"],
+        draft_itinerary=state["draft_itinerary"],
+        clarification=clarification,
+    )
 
 
 async def reason_node(state: TripPlannerState) -> TripPlannerState:
@@ -99,11 +146,13 @@ def build_graph(
     """Build and compile the ReAct trip planner graph."""
     graph: StateGraph[TripPlannerState, None, TripPlannerState, TripPlannerState] = StateGraph(TripPlannerState)
 
+    graph.add_node("triage", triage_node)
     graph.add_node("reason", reason_node)
     graph.add_node("tools", ToolNode(_TOOLS))
     graph.add_node("format", format_node)
 
-    graph.set_entry_point("reason")
+    graph.set_entry_point("triage")
+    graph.add_conditional_edges("triage", _route_after_triage)
     graph.add_conditional_edges("reason", _route_after_reason)
     graph.add_edge("tools", "reason")
     graph.add_edge("format", END)
