@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from langchain_core.messages import AIMessage, HumanMessage
 
 from trip_planner.agents.state import TripPlannerState
+from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
 from trip_planner.services.auth_service import create_access_token
 
@@ -43,6 +44,19 @@ def make_plan_result(itinerary: Itinerary | None = None) -> TripPlannerState:
         trip_request="Paris 7 days",
         draft_itinerary="",
         itinerary=resolved,
+    )
+
+
+def make_clarification_result(message: str = "Could you tell me where and how long?") -> TripPlannerState:
+    clarification = ClarificationRequest(
+        message=message,
+        missing_fields=["destination", "duration"],
+    )
+    return TripPlannerState(
+        messages=[],
+        trip_request="plan me a trip",
+        draft_itinerary="",
+        clarification=clarification,
     )
 
 
@@ -100,8 +114,9 @@ async def test_create_thread_returns_201_with_thread_and_itinerary(db_client: As
     body = response.json()
     assert body["thread"]["title"] == thread.title
     assert body["thread"]["slug"] == thread.slug
-    assert body["itinerary"]["destination"] == "Paris"
-    assert body["itinerary"]["total_days"] == 1
+    assert body["result"]["type"] == "itinerary"
+    assert body["result"]["itinerary"]["destination"] == "Paris"
+    assert body["result"]["itinerary"]["total_days"] == 1
 
 
 async def test_create_thread_passes_query_to_planner(db_client: AsyncClient) -> None:
@@ -189,7 +204,7 @@ async def test_create_thread_returns_500_when_graph_returns_no_itinerary(
         )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "Graph did not produce a structured itinerary"
+    assert response.json()["detail"] == "Graph did not produce a structured itinerary or clarification"
 
 
 async def test_create_thread_returns_401_without_token(db_client: AsyncClient) -> None:
@@ -244,7 +259,8 @@ async def test_send_message_returns_200_with_itinerary(db_client: AsyncClient) -
         )
 
     assert response.status_code == 200
-    assert response.json()["itinerary"]["destination"] == "Tokyo"
+    assert response.json()["result"]["type"] == "itinerary"
+    assert response.json()["result"]["itinerary"]["destination"] == "Tokyo"
 
 
 async def test_send_message_passes_query_to_planner(db_client: AsyncClient) -> None:
@@ -347,7 +363,7 @@ async def test_send_message_returns_500_when_graph_returns_no_itinerary(
         )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "Graph did not produce a structured itinerary"
+    assert response.json()["detail"] == "Graph did not produce a structured itinerary or clarification"
 
 
 # --- GET /threads ---
@@ -569,3 +585,104 @@ async def test_delete_thread_returns_403_for_cross_user_access(db_client: AsyncC
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Access denied"
+
+
+# --- Clarification responses ---
+
+
+async def test_create_thread_returns_201_with_clarification_when_request_is_vague(
+    db_client: AsyncClient,
+) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+    result = make_clarification_result()
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
+        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_create_thread.return_value = thread
+        mock_planner.return_value = result
+
+        response = await db_client.post(
+            "/threads",
+            json={"query": "Plan me a trip please help"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["result"]["type"] == "clarification"
+    expected_clarification = result.get("clarification")
+    assert expected_clarification is not None
+    assert body["result"]["clarification"]["message"] == expected_clarification.message
+    assert "destination" in body["result"]["clarification"]["missing_fields"]
+
+
+async def test_create_thread_persists_clarification_as_assistant_message(
+    db_client: AsyncClient,
+) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+    clarification_message = "Could you tell me where and how long?"
+    result = make_clarification_result(clarification_message)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
+        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock) as mock_create_message,
+    ):
+        mock_get_user.return_value = user
+        mock_create_thread.return_value = thread
+        mock_planner.return_value = result
+
+        await db_client.post(
+            "/threads",
+            json={"query": "Plan me a trip please help"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert mock_create_message.call_count == 2
+    human_call = mock_create_message.call_args_list[0]
+    assistant_call = mock_create_message.call_args_list[1]
+    assert human_call.kwargs["role"] == "human"
+    assert assistant_call.kwargs["role"] == "assistant"
+    assert assistant_call.kwargs["content"] == clarification_message
+
+
+async def test_send_message_returns_200_with_clarification_on_vague_follow_up(
+    db_client: AsyncClient,
+) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+    result = make_clarification_result()
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_get_thread.return_value = thread
+        mock_planner.return_value = result
+
+        response = await db_client.post(
+            f"/threads/{thread.id}/messages",
+            json={"query": "somewhere warm"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["type"] == "clarification"
+    expected_clarification = result.get("clarification")
+    assert expected_clarification is not None
+    assert body["result"]["clarification"]["message"] == expected_clarification.message

@@ -85,7 +85,7 @@
 - [x] Add `triage_node` before tools: decides `plan | clarify` based on completeness of `trip_request`
 - [x] Conditional edge: if `clarify` → return `ClarificationRequest`, skip tool calls
 - [x] `POST /trips/{thread_id}/messages` response is a discriminated union: `Itinerary | ClarificationRequest`
-- [ ] Multi-turn test: vague query → clarifying questions → answers → full itinerary
+- [x] Multi-turn test: vague query → clarifying questions → answers → full itinerary
 
 ---
 

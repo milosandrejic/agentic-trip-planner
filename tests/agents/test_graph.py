@@ -3,8 +3,15 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from trip_planner.agents.graph import _route_after_reason, reason_node, format_node
+from trip_planner.agents.graph import (
+    _route_after_reason,
+    _route_after_triage,
+    format_node,
+    reason_node,
+    triage_node,
+)
 from trip_planner.agents.state import TripPlannerState
+from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
 
 
@@ -83,3 +90,79 @@ async def test_format_node_returns_structured_itinerary() -> None:
 
     assert result.get("itinerary") == itinerary
     assert result["trip_request"] == "Paris 7 days"
+
+
+# --- _route_after_triage ---
+
+
+def test_route_after_triage_returns_end_when_clarification_is_set() -> None:
+    clarification = ClarificationRequest(
+        message="Could you tell me where and how long?",
+        missing_fields=["destination", "duration"],
+    )
+    state = TripPlannerState(
+        messages=[],
+        trip_request="plan me a trip",
+        draft_itinerary="",
+        clarification=clarification,
+    )
+
+    result = _route_after_triage(state)
+
+    assert result == "__end__"
+
+
+def test_route_after_triage_returns_reason_when_no_clarification() -> None:
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days")],
+        trip_request="Paris 7 days",
+        draft_itinerary="",
+    )
+
+    result = _route_after_triage(state)
+
+    assert result == "reason"
+
+
+# --- triage_node ---
+
+
+async def test_triage_node_sets_clarification_when_llm_decides_to_clarify() -> None:
+    clarification = ClarificationRequest(
+        message="Could you tell me where and how long?",
+        missing_fields=["destination", "duration"],
+    )
+
+    from trip_planner.agents.graph import _TriageDecision
+
+    decision = _TriageDecision(should_clarify=True, clarification=clarification)
+    state = TripPlannerState(
+        messages=[HumanMessage(content="plan me a trip")],
+        trip_request="plan me a trip",
+        draft_itinerary="",
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("clarification") == clarification
+    assert result["trip_request"] == "plan me a trip"
+
+
+async def test_triage_node_sets_clarification_to_none_when_request_is_complete() -> None:
+    from trip_planner.agents.graph import _TriageDecision
+
+    decision = _TriageDecision(should_clarify=False, clarification=None)
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days in July, I like history")],
+        trip_request="Paris 7 days in July, I like history",
+        draft_itinerary="",
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("clarification") is None
+    assert result["trip_request"] == "Paris 7 days in July, I like history"
