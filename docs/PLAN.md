@@ -97,36 +97,35 @@
 - [x] Build `services/duffel_client.py` — OAuth token refresh, retry, rate limiting
 - [x] Build `tools/flight_search.py` — Duffel flight search (origin, dest, dates, pax)
 - [x] Register tool with agent, update prompt to extract origin city
+- [x] Define `FlightOption`: `airline`, `stops`, `duration_min`, `price`, `currency`, `outbound_date`, `return_date`, `booking_url`
+- [x] Extend `Itinerary` with `flights: list[FlightOption]` (optional, default empty)
 
 ### 5b — Hotels (LiteAPI)
 - [ ] Build `services/liteapi_client.py` — API key auth, retry, rate limiting
 - [ ] Build `tools/hotel_search.py` — city + dates + pax → top offers
+- [ ] Register tool with agent, update prompt
+- [ ] Define `HotelOption`: `name`, `area`, `rating`, `nightly_price`, `total_price`, `coordinates`, `booking_url`
+- [ ] Extend `Itinerary` with `hotels: list[HotelOption]` (optional, default empty)
 
 ### 5c — Places / POI (Geoapify + Google Places)
 - [ ] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
 - [ ] Build `tools/place_details.py` — Google Places Details for top N picks only
 - [ ] Build `tools/places_text_search.py` — Google Places Text Search for named lookups
+- [ ] Extend `Activity` with `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url` (all optional)
 
 ### 5d — Events (Ticketmaster Discovery)
 - [ ] Build `services/ticketmaster_client.py` — auth, rate limiting
 - [ ] Build `tools/event_search.py` — city + date range + classification (music / sports / arts)
-- [ ] Cache responses (12h TTL)
 - [ ] Update prompt: call `event_search` when user mentions interests
+- [ ] Define `EventOption`: `name`, `category`, `venue`, `start_time`, `ticket_url`, `price_range`, `coordinates`
+- [ ] Extend `Itinerary` with `events: list[EventOption]` (optional, default empty)
 
 ### 5e — Maps & Routing (Google Maps)
 - [ ] Build `tools/distance_matrix.py` — travel time between activities (walking + transit)
 - [ ] Build `tools/directions.py` — turn-by-turn between two stops
-- [ ] Post-process: cluster same-day activities by proximity, annotate each `Activity` with `travel_from_previous`
-
-### 5f — Schema extensions
-- [ ] Extend `Itinerary`: `flights: list[FlightOption]`, `hotels: list[HotelOption]`, `events: list[EventOption]`
-- [ ] Extend `Activity`: `time`, `duration_min`, `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url`, `travel_from_previous`
-- [ ] Define `EventOption`: `name`, `category`, `venue`, `start_time`, `ticket_url`, `price_range`, `coordinates`
-- [ ] Define `FlightOption`: `outbound`, `return_`, `airline`, `stops`, `duration_min`, `price`, `booking_url`
-- [ ] Define `HotelOption`: `name`, `area`, `rating`, `nightly_price`, `total_price`, `coordinates`, `booking_url`
-- [ ] Define `TravelLeg` (for `travel_from_previous`): `mode` (walk / transit / drive), `duration_min`, `distance_m`
-- [ ] All new fields optional so earlier-phase outputs stay valid
-- [ ] Per-tool unit tests with VCR.py cassettes
+- [ ] Post-process: cluster same-day activities by proximity
+- [ ] Define `TravelLeg`: `mode` (walk / transit / drive), `duration_min`, `distance_m`
+- [ ] Extend `Activity` with `travel_from_previous: TravelLeg | None`
 
 ## Phase 6 — Multi-Agent Orchestration
 
