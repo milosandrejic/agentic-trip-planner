@@ -94,10 +94,9 @@
 ## Phase 5 — Travel API Tools
 
 ### 5a — Flights (Duffel)
-- [ ] Build `services/duffel_client.py` — OAuth token refresh, retry, rate limiting
-- [ ] Build `tools/flight_search.py` — Duffel flight search (origin, dest, dates, pax)
-- [ ] Add `api_cache` table for response caching (24h TTL)
-- [ ] Register tool with agent, update prompt to extract origin city
+- [x] Build `services/duffel_client.py` — OAuth token refresh, retry, rate limiting
+- [x] Build `tools/flight_search.py` — Duffel flight search (origin, dest, dates, pax)
+- [x] Register tool with agent, update prompt to extract origin city
 
 ### 5b — Hotels (LiteAPI)
 - [ ] Build `services/liteapi_client.py` — API key auth, retry, rate limiting
@@ -157,6 +156,7 @@
 
 - [ ] Per-user rate limiting (`slowapi`)
 - [ ] Per-user monthly budget cap (`user_budgets` table; reject when exceeded)
+- [ ] Redis response cache for external API calls (Duffel, hotels, events) with per-source TTL
 - [ ] Background processing for long plans (FastAPI `BackgroundTasks` or `arq`)
 - [ ] Structured error taxonomy (`parse_error`, `tool_error`, `quota_error`, `auth_error`)
 - [ ] OpenAPI docs polish, example payloads

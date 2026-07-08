@@ -1,5 +1,6 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false
 import uuid
+from datetime import date
 from typing import Literal, cast
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -15,14 +16,19 @@ from trip_planner.agents.state import TripPlannerState
 from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
+from trip_planner.tools.flight_search import flight_search_tool
 from trip_planner.tools.web_search import web_search_tool
 from trip_planner.tools.weather import weather_tool
 
-_TOOLS = [web_search_tool, weather_tool]
+_TOOLS = [web_search_tool, weather_tool, flight_search_tool]
 
-_TRIAGE_PROMPT = (
+_TRIAGE_PROMPT_TEMPLATE = (
+    "Today is {today}. "
     "You are assessing whether a trip planning request has enough information to proceed. "
     "A request is ready to plan if it includes at minimum: a destination and an approximate duration or travel dates. "
+    "Travel dates must be in the future relative to today ({today}). "
+    "If the user mentions only a month with no year (e.g. 'July'), infer the nearest future occurrence. "
+    "If dates are in the past or too vague to resolve, treat them as missing. "
     "If the request is missing critical information, set should_clarify=true and provide a friendly, "
     "conversational message asking for what is needed. "
     "List the missing fields by their machine-readable names "
@@ -30,18 +36,26 @@ _TRIAGE_PROMPT = (
     "If the request has enough to plan, set should_clarify=false and leave clarification as null."
 )
 
-_SYSTEM_PROMPT = (
-    "You are an expert trip planner. "
+_SYSTEM_PROMPT_TEMPLATE = (
+    "You are an expert trip planner. Today is {today}. "
     "Create detailed, practical travel itineraries based on the user's request. "
+    "All travel dates must be on or after {today} — never use past dates for weather forecasts or flight searches. "
+    "If a user mentions only a month, use the nearest future occurrence of that month. "
     "Use the web_search tool to find current information about destinations, attractions, and local events. "
     "Use the weather tool to get forecasts when the user provides travel dates. "
+    "Use the flight_search tool to find available flights when the user provides an origin city and travel dates. "
+    "Always convert city names to IATA airport codes before calling flight_search (e.g. London → LHR, Paris → CDG). "
     "Always cite your sources by including the URL and title of pages you reference. "
     "Ask clarifying questions if the request is too vague to plan well."
 )
 
 _FORMAT_PROMPT = (
     "Based on the trip planning conversation above, produce a complete structured itinerary. "
-    "Include all days, activities, weather information, and sources discussed."
+    "You MUST include every single day — if the user asked for 3 days, the itinerary must have exactly 3 DayPlan entries. "
+    "For each day include at least 3 activities. "
+    "Include weather summaries where the weather tool provided data. "
+    "Include all sources discussed. "
+    "Do not truncate or summarise days — output the full itinerary."
 )
 
 _settings = get_settings()
@@ -87,7 +101,8 @@ def _route_after_reason(state: TripPlannerState) -> Literal["tools", "format"]:
 
 async def triage_node(state: TripPlannerState) -> TripPlannerState:
     """Assess completeness of the trip request and decide whether to plan or ask for clarification."""
-    triage_message = SystemMessage(content=_TRIAGE_PROMPT)
+    today = date.today().isoformat()
+    triage_message = SystemMessage(content=_TRIAGE_PROMPT_TEMPLATE.format(today=today))
     user_request = HumanMessage(content=state["trip_request"])
 
     decision = cast(_TriageDecision, await _llm_triage.ainvoke([triage_message, user_request]))
@@ -104,7 +119,8 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
 
 async def reason_node(state: TripPlannerState) -> TripPlannerState:
     """Reason about the current state: call tools or produce a final answer."""
-    system_message = SystemMessage(content=_SYSTEM_PROMPT)
+    today = date.today().isoformat()
+    system_message = SystemMessage(content=_SYSTEM_PROMPT_TEMPLATE.format(today=today))
     messages_with_system = [system_message] + list(state["messages"])
 
     response = await _llm_with_tools.ainvoke(messages_with_system)

@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Tools (Phase 3)
     tavily_api_key: str = ""
 
+    # Travel APIs (Phase 5)
+    duffel_api_key: str = ""
+
     # Observability
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""

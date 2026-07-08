@@ -94,3 +94,29 @@ async def test_weather_tool_returns_full_forecast_string() -> None:
 
     assert "Weather forecast for Paris:" in result
     assert "28.5°C" in result
+
+
+async def test_weather_tool_returns_error_string_on_http_error() -> None:
+    with patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords:
+        mock_coords.side_effect = httpx.HTTPStatusError(
+            "400", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+
+        result = await weather_tool.ainvoke(
+            {"city": "Paris", "start_date": "2020-01-01", "end_date": "2020-01-03"}
+        )
+
+    assert "unavailable" in result
+    assert "400" in result
+
+
+async def test_weather_tool_returns_error_string_for_unknown_city() -> None:
+    with patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords:
+        mock_coords.side_effect = ValueError("City not found: 'Atlantis'")
+
+        result = await weather_tool.ainvoke(
+            {"city": "Atlantis", "start_date": "2024-07-01", "end_date": "2024-07-03"}
+        )
+
+    assert "unavailable" in result
+    assert "Atlantis" in result

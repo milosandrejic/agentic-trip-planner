@@ -70,8 +70,13 @@ async def _fetch_forecast(lat: float, lon: float, start_date: str, end_date: str
 @tool(args_schema=_WeatherInput)
 async def weather_tool(city: str, start_date: str, end_date: str) -> str:
     """Get a daily weather forecast for a city between two dates (YYYY-MM-DD format)."""
-    lat, lon = await _fetch_coordinates(city)
-    forecast_lines = await _fetch_forecast(lat, lon, start_date, end_date)
+    try:
+        lat, lon = await _fetch_coordinates(city)
+        forecast_lines = await _fetch_forecast(lat, lon, start_date, end_date)
+    except ValueError as exc:
+        return f"Weather unavailable: {exc}"
+    except httpx.HTTPStatusError as exc:
+        return f"Weather unavailable: Open-Meteo returned {exc.response.status_code}"
 
     header = f"Weather forecast for {city}:"
     return "\n".join([header] + forecast_lines)
