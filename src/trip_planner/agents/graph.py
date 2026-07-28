@@ -17,10 +17,11 @@ from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 from trip_planner.tools.flight_search import flight_search_tool
+from trip_planner.tools.hotel_search import hotel_search_tool
 from trip_planner.tools.web_search import web_search_tool
 from trip_planner.tools.weather import weather_tool
 
-_TOOLS = [web_search_tool, weather_tool, flight_search_tool]
+_TOOLS = [web_search_tool, weather_tool, flight_search_tool, hotel_search_tool]
 
 _TRIAGE_PROMPT_TEMPLATE = (
     "Today is {today}. "
@@ -45,6 +46,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Use the weather tool to get forecasts when the user provides travel dates. "
     "Use the flight_search tool to find available flights when the user provides an origin city and travel dates. "
     "Always convert city names to IATA airport codes before calling flight_search (e.g. London → LHR, Paris → CDG). "
+    "Use the hotel_search tool to find accommodation when the user provides a destination and travel dates. "
+    "Pass the destination city name and its ISO 3166-1 alpha-2 country code (e.g. Paris → FR, Tokyo → JP). "
     "Always cite your sources by including the URL and title of pages you reference. "
     "Ask clarifying questions if the request is too vague to plan well."
 )
@@ -54,6 +57,8 @@ _FORMAT_PROMPT = (
     "You MUST include every single day — if the user asked for 3 days, the itinerary must have exactly 3 DayPlan entries. "
     "For each day include at least 3 activities. "
     "Include weather summaries where the weather tool provided data. "
+    "Populate the flights field with every flight option returned by the flight_search tool. "
+    "Populate the hotels field with every hotel option returned by the hotel_search tool. "
     "Include all sources discussed. "
     "Do not truncate or summarise days — output the full itinerary."
 )

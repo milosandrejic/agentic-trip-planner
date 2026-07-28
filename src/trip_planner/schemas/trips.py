@@ -36,6 +36,20 @@ class FlightOption(BaseModel):
     booking_url: str | None = Field(default=None, description="Direct booking URL if available.")
 
 
+class HotelOption(BaseModel):
+    name: str = Field(description="Hotel name, e.g. 'Hotel Le Marais'.")
+    area: str | None = Field(default=None, description="Neighbourhood or address of the hotel.")
+    rating: float | None = Field(default=None, description="Star rating, e.g. 4.5.")
+    nightly_price: str | None = Field(
+        default=None, description="Price per night as a string, e.g. '95.00'."
+    )
+    total_price: str = Field(description="Total price for the stay as a string, e.g. '380.00'.")
+    currency: str = Field(description="ISO currency code, e.g. 'USD'.")
+    latitude: float | None = Field(default=None, description="Latitude of the hotel.")
+    longitude: float | None = Field(default=None, description="Longitude of the hotel.")
+    booking_url: str | None = Field(default=None, description="Direct booking URL if available.")
+
+
 class Itinerary(BaseModel):
     destination: str
     total_days: int
@@ -44,6 +58,10 @@ class Itinerary(BaseModel):
     flights: list[FlightOption] = Field(
         default_factory=lambda: [],
         description="Top flight options found for this trip.",
+    )
+    hotels: list[HotelOption] = Field(
+        default_factory=lambda: [],
+        description="Top hotel options found for this trip.",
     )
     sources: list[Source] = Field(default_factory=lambda: [])
 

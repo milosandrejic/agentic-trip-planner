@@ -102,10 +102,10 @@
 
 ### 5b — Hotels (LiteAPI)
 - [x] Build `services/liteapi_client.py` — API key auth, retry, rate limiting
-- [ ] Build `tools/hotel_search.py` — city + dates + pax → top offers
-- [ ] Register tool with agent, update prompt
-- [ ] Define `HotelOption`: `name`, `area`, `rating`, `nightly_price`, `total_price`, `coordinates`, `booking_url`
-- [ ] Extend `Itinerary` with `hotels: list[HotelOption]` (optional, default empty)
+- [x] Build `tools/hotel_search.py` — city + dates + pax → top offers
+- [x] Register tool with agent, update prompt
+- [x] Define `HotelOption`: `name`, `area`, `rating`, `nightly_price`, `total_price`, `coordinates`, `booking_url`
+- [x] Extend `Itinerary` with `hotels: list[HotelOption]` (optional, default empty)
 
 ### 5c — Places / POI (Geoapify + Google Places)
 - [ ] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
