@@ -101,7 +101,7 @@
 - [x] Extend `Itinerary` with `flights: list[FlightOption]` (optional, default empty)
 
 ### 5b — Hotels (LiteAPI)
-- [ ] Build `services/liteapi_client.py` — API key auth, retry, rate limiting
+- [x] Build `services/liteapi_client.py` — API key auth, retry, rate limiting
 - [ ] Build `tools/hotel_search.py` — city + dates + pax → top offers
 - [ ] Register tool with agent, update prompt
 - [ ] Define `HotelOption`: `name`, `area`, `rating`, `nightly_price`, `total_price`, `coordinates`, `booking_url`
