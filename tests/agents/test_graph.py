@@ -1,13 +1,17 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+import trip_planner.agents.graph as graph_module
 from trip_planner.agents.graph import (
     _route_after_reason,
     _route_after_triage,
     format_node,
+    init_graph,
     reason_node,
+    run_planner,
     triage_node,
 )
 from trip_planner.agents.state import TripPlannerState
@@ -166,3 +170,56 @@ async def test_triage_node_sets_clarification_to_none_when_request_is_complete()
 
     assert result.get("clarification") is None
     assert result["trip_request"] == "Paris 7 days in July, I like history"
+
+
+# --- run_planner graph selection ---
+
+
+async def test_run_planner_uses_stateful_graph_with_thread_id() -> None:
+    state = _make_state([HumanMessage(content="Paris 7 days")])
+    compiled = MagicMock()
+    compiled.ainvoke = AsyncMock(return_value=state)
+
+    with patch("trip_planner.agents.graph._compiled_graph", compiled):
+        await run_planner(state, thread_id="abc-123")
+
+    compiled.ainvoke.assert_awaited_once()
+    config = compiled.ainvoke.call_args.args[1]
+    assert config["configurable"]["thread_id"] == "abc-123"
+
+
+async def test_run_planner_generates_thread_id_when_missing() -> None:
+    state = _make_state([HumanMessage(content="Paris 7 days")])
+    compiled = MagicMock()
+    compiled.ainvoke = AsyncMock(return_value=state)
+
+    with patch("trip_planner.agents.graph._compiled_graph", compiled):
+        await run_planner(state)
+
+    config = compiled.ainvoke.call_args.args[1]
+    assert config["configurable"]["thread_id"]
+
+
+async def test_run_planner_raises_when_not_initialized() -> None:
+    state = _make_state([HumanMessage(content="Paris")])
+
+    with (
+        patch("trip_planner.agents.graph._compiled_graph", None),
+        pytest.raises(RuntimeError, match="init_graph"),
+    ):
+        await run_planner(state)
+
+
+def test_init_graph_compiles_graph_with_checkpointer() -> None:
+    checkpointer = MagicMock()
+    compiled = MagicMock()
+
+    with (
+        patch("trip_planner.agents.graph._compiled_graph", None),
+        patch("trip_planner.agents.graph.build_graph", return_value=compiled) as mock_build,
+    ):
+        init_graph(checkpointer)
+
+        assert graph_module._compiled_graph is compiled
+
+    mock_build.assert_called_once_with(checkpointer=checkpointer)

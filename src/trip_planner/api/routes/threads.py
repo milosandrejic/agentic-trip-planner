@@ -76,6 +76,10 @@ async def create_thread(
     thread = await thread_repository.create_thread(
         db, user_id=current_user.id, title=title, slug=slug
     )
+    await message_repository.create_message(
+        db, thread_id=thread.id, role="human", content=body.query
+    )
+    await db.commit()
 
     initial_state = TripPlannerState(
         messages=[HumanMessage(content=body.query)],
@@ -86,10 +90,6 @@ async def create_thread(
 
     clarification = result.get("clarification")
     itinerary = result.get("itinerary")
-
-    await message_repository.create_message(
-        db, thread_id=thread.id, role="human", content=body.query
-    )
 
     if clarification is not None:
         await message_repository.create_message(
@@ -141,6 +141,11 @@ async def send_message(
     if not is_owner:
         raise _forbidden
 
+    await message_repository.create_message(
+        db, thread_id=thread.id, role="human", content=body.query
+    )
+    await db.commit()
+
     follow_up_state = TripPlannerState(
         messages=[HumanMessage(content=body.query)],
         trip_request=body.query,
@@ -151,10 +156,6 @@ async def send_message(
 
     clarification = result.get("clarification")
     itinerary = result.get("itinerary")
-
-    await message_repository.create_message(
-        db, thread_id=thread.id, role="human", content=body.query
-    )
 
     if clarification is not None:
         await message_repository.create_message(

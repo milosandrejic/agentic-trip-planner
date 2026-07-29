@@ -174,7 +174,7 @@ _compiled_graph: CompiledStateGraph[TripPlannerState, None, TripPlannerState, Tr
 
 
 def init_graph(checkpointer: AsyncPostgresSaver) -> None:
-    """Compile the graph with the given checkpointer and store it module-wide."""
+    """Compile the stateful graph with the given checkpointer and store it module-wide."""
     global _compiled_graph
     _compiled_graph = build_graph(checkpointer=checkpointer)
 
@@ -200,7 +200,11 @@ def build_graph(
 
 
 async def run_planner(state: TripPlannerState, thread_id: str | None = None) -> TripPlannerState:
-    """Invoke the compiled graph with an optional thread_id for checkpointed state."""
+    """Invoke the stateful trip planner graph.
+
+    Every run is checkpointed. `thread_id` resumes an existing conversation; when omitted a
+    fresh id is generated for a new one.
+    """
     compiled = _compiled_graph
 
     if compiled is None:

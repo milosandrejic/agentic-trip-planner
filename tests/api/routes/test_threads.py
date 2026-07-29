@@ -180,6 +180,40 @@ async def test_create_thread_persists_human_and_assistant_messages(db_client: As
     assert assistant_call.kwargs["content"] == itinerary.summary
 
 
+async def test_create_thread_commits_request_before_running_ai(
+    db_client: AsyncClient, mock_db_session: AsyncMock
+) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    result = make_plan_result()
+    thread = make_mock_thread(user.id)
+    commits_before_ai: dict[str, int] = {}
+
+    async def capture_commit_count(*_args: object, **_kwargs: object) -> TripPlannerState:
+        commits_before_ai["count"] = mock_db_session.commit.await_count
+        return result
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
+        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_create_thread.return_value = thread
+        mock_planner.side_effect = capture_commit_count
+
+        response = await db_client.post(
+            "/threads",
+            json={"query": "Plan a 7-day Paris trip for 2 people"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 201
+    assert commits_before_ai["count"] == 1
+    assert mock_db_session.commit.await_count == 2
+
+
 async def test_create_thread_returns_500_when_graph_returns_no_itinerary(
     db_client: AsyncClient,
 ) -> None:
@@ -291,6 +325,40 @@ async def test_send_message_passes_query_to_planner(db_client: AsyncClient) -> N
     assert called_state["trip_request"] == query
     assert called_state["messages"][0].content == query
     assert called_thread_id == str(thread.id)
+
+
+async def test_send_message_commits_request_before_running_ai(
+    db_client: AsyncClient, mock_db_session: AsyncMock
+) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    result = make_plan_result()
+    thread = make_mock_thread(user.id)
+    commits_before_ai: dict[str, int] = {}
+
+    async def capture_commit_count(*_args: object, **_kwargs: object) -> TripPlannerState:
+        commits_before_ai["count"] = mock_db_session.commit.await_count
+        return result
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_get_thread.return_value = thread
+        mock_planner.side_effect = capture_commit_count
+
+        response = await db_client.post(
+            f"/threads/{thread.id}/messages",
+            json={"query": "Add a day trip to Mount Fuji"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert commits_before_ai["count"] == 1
+    assert mock_db_session.commit.await_count == 2
 
 
 async def test_send_message_returns_404_when_thread_not_found(db_client: AsyncClient) -> None:

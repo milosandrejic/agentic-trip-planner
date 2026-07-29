@@ -145,12 +145,14 @@
 - [x] `Settings.assert_production_ready()` — abort startup in production when `jwt_secret` is default/empty or required provider keys are missing; call in `main.py` lifespan
 - [x] Tests: inactive → 401, unknown/malformed sub → 401, prod+default secret aborts, dev tolerates
 
-## Wave 2 — Transaction Lifetime + Stateless vs Stateful Graph
+## Wave 2 — Transaction Lifetime
 
-- [ ] Split graphs: stateless compiled graph (no checkpointer) for `/trips/plan`; stateful (`AsyncPostgresSaver`) for threads; update `init_graph`/`build_graph`/`run_planner` to select
-- [ ] `/trips/plan` creates **no** checkpoint rows
-- [ ] Reduce transaction lifetime in `threads.py`: Validate → Persist request → **commit** → Run AI (outside txn) → Persist response → **commit** (no txn held across `run_planner`)
-- [ ] Tests: `/trips/plan` creates no checkpoint; thread flow commits request before AI; ownership preserved
+> **Decision:** the stateless graph was removed. Every trip becomes a persistent, resumable
+> conversation (see Wave 7 trip-centric model), so the graph is **always stateful** — a single
+> checkpointed graph. `run_planner` generates a `thread_id` when one isn't supplied.
+
+- [x] Reduce transaction lifetime in `threads.py`: Validate → Persist request → **commit** → Run AI (outside txn) → Persist response → **commit** (no txn held across `run_planner`)
+- [x] Tests: thread flow commits request before AI; ownership preserved
 
 ## Wave 3 — Structured Tool Outputs + LLM Separation + Graph State + Safety Limits
 
@@ -186,10 +188,26 @@
 
 > Deferred: start **after** the Places domain is complete and **before** the Frontend phase. Largest wave — plan as its own sub-plan first.
 
+> **Architectural decision — Trip-centric conversation model (drives this wave):**
+> The product is an AI Travel Assistant, not a generic chat app. The core business entity is a
+> **Trip**; the conversation is merely the interface for planning it. Domain hierarchy:
+> `Trip → Thread → (Messages + LangGraph Checkpoints)`. Responsibilities are separated —
+> **Trip** owns destination/budget/itinerary/selected flights+hotels/metadata; **Thread** owns
+> conversation history + LangGraph execution state/checkpoints.
+> - `POST /trips` — the trip-centric entry point: create Trip, create Thread automatically,
+>   invoke the **stateful** graph, write the first checkpoint, return the first assistant
+>   response. Always starts a new conversation (supersedes today's `POST /threads`).
+> - `POST /threads/{thread_id}/messages` — continue only: load checkpoint, resume, save
+>   checkpoint, return response. Never creates Trips.
+> - Every MVP trip is a persistent, resumable conversation (survives refresh / return-next-day),
+>   so the stateful graph is the default. The stateless graph was **removed** in Wave 2; decide
+>   here whether `/trips/plan` is kept (now stateful) or folded into `POST /trips`.
+
 - [ ] Introduce `Trip` + `ItineraryVersion` — stop storing itinerary JSON only inside assistant messages; persist versioned itineraries (edit/version/rollback)
 - [ ] Trip lifecycle states: Draft / Generating / Ready / Completed / Archived (status column + transitions)
 - [ ] Provider-independent `Place` model (provider, external_id, coordinates, metadata) so activities aren't coupled to provider IDs
 - [ ] Persist Selected Flight / Selected Hotel separately from search results
+- [ ] Decide the fate of `POST /trips/plan` (fold into `POST /trips` vs keep as a thin stateful alias) once `POST /trips` lands
 - [ ] Tests: trip versioning/rollback, status transitions, place normalization, selection persistence
 
 ## Wave 8 — Trip Validation Engine (future product)
