@@ -142,8 +142,8 @@
 
 - [x] Validate JWT subject — guard malformed `sub` (UUID parse) → 401
 - [x] Reject inactive users — add `is_active` check in `get_current_user` (currently missing)
-- [ ] `Settings.assert_production_ready()` — abort startup in production when `jwt_secret` is default/empty or required provider keys are missing; call in `main.py` lifespan
-- [ ] Tests: inactive → 401, unknown/malformed sub → 401, prod+default secret aborts, dev tolerates
+- [x] `Settings.assert_production_ready()` — abort startup in production when `jwt_secret` is default/empty or required provider keys are missing; call in `main.py` lifespan
+- [x] Tests: inactive → 401, unknown/malformed sub → 401, prod+default secret aborts, dev tolerates
 
 ## Wave 2 — Transaction Lifetime + Stateless vs Stateful Graph
 

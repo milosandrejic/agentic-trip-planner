@@ -1,6 +1,6 @@
 # pyright: reportMissingTypeStubs=false
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -27,7 +27,10 @@ _configure_langsmith()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    for warning in settings.assert_production_ready():
+        log.warning("config.warning", detail=warning)
+
     async with AsyncPostgresSaver.from_conn_string(settings.checkpoint_db_url) as checkpointer:
         await checkpointer.setup()
         init_graph(checkpointer)
