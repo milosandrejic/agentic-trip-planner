@@ -109,9 +109,9 @@
 
 ### 5c — Places / POI (Geoapify + Google Places)
 - [x] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
-- [ ] Build `tools/place_details.py` — Google Places Details for top N picks only
-- [ ] Build `tools/places_text_search.py` — Google Places Text Search for named lookups
-- [ ] Extend `Activity` with `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url` (all optional)
+- [x] Build `tools/place_details.py` — Google Places Details for top N picks only
+- [x] Build `tools/places_text_search.py` — Google Places Text Search for named lookups
+- [x] Extend `Activity` with `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url` (all optional)
 
 ### 5d — Events (Ticketmaster Discovery)
 - [ ] Build `services/ticketmaster_client.py` — auth, rate limiting

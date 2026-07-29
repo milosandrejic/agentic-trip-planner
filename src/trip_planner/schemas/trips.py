@@ -14,6 +14,21 @@ class Activity(BaseModel):
     time: str = Field(description="Time of day, e.g. 'Morning', '09:00'")
     description: str
     duration_hours: float | None = None
+    place_id: str | None = Field(default=None, description="Google Places place ID, if known.")
+    latitude: float | None = Field(default=None, description="Latitude of the place.")
+    longitude: float | None = Field(default=None, description="Longitude of the place.")
+    address: str | None = Field(default=None, description="Formatted address of the place.")
+    rating: float | None = Field(default=None, description="Rating out of 5, if available.")
+    opening_hours: list[str] = Field(
+        default_factory=lambda: [],
+        description="Weekday opening-hours descriptions, if available.",
+    )
+    price_level: str | None = Field(
+        default=None, description="Relative price level, e.g. 'PRICE_LEVEL_MODERATE'."
+    )
+    price_eur: float | None = Field(default=None, description="Approximate entry/ticket price in EUR.")
+    ticket_url: str | None = Field(default=None, description="Booking or ticket URL, if available.")
+    photo_url: str | None = Field(default=None, description="Representative photo URL, if available.")
     sources: list[Source] = Field(default_factory=lambda: [])
 
 

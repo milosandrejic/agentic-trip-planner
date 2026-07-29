@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     duffel_api_key: str = ""
     liteapi_key: str = ""
     geoapify_api_key: str = ""
+    google_places_api_key: str = ""
 
     # Observability
     langsmith_tracing: bool = False
