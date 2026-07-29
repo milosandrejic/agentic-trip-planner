@@ -15,6 +15,7 @@ def make_mock_user(user_id: uuid.UUID | None = None) -> MagicMock:
     user.last_name = "Lovelace"
     user.country = None
     user.created_at = datetime.now(timezone.utc)
+    user.is_active = True
 
     return user
 
@@ -49,14 +50,24 @@ async def test_get_me_returns_401_for_invalid_token(db_client: AsyncClient) -> N
     assert response.json()["detail"] == "Invalid or expired token"
 
 
-async def test_get_me_returns_401_when_user_not_found(db_client: AsyncClient) -> None:
-    user_id = uuid.uuid4()
-    token = create_access_token(str(user_id))
+async def test_get_me_returns_401_when_user_inactive(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    user.is_active = False
+    token = create_access_token(str(user.id))
 
     with patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_get:
-        mock_get.return_value = None
+        mock_get.return_value = user
 
         response = await db_client.get("/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid or expired token"
+
+
+async def test_get_me_returns_401_for_malformed_subject(db_client: AsyncClient) -> None:
+    token = create_access_token("not-a-uuid")
+
+    response = await db_client.get("/me", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid or expired token"

@@ -111,6 +111,7 @@
 - [x] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
 - [x] Build `tools/place_details.py` — Google Places Details for top N picks only
 - [x] Build `tools/places_text_search.py` — Google Places Text Search for named lookups
+- [x] Register the three places tools with the agent, update prompt (search → text-search → details flow)
 - [x] Extend `Activity` with `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url` (all optional)
 
 ### 5d — Events (Ticketmaster Discovery)
@@ -139,8 +140,8 @@
 
 ## Wave 1 — Security & Startup Hardening
 
-- [ ] Validate JWT subject — guard malformed `sub` (UUID parse) → 401
-- [ ] Reject inactive users — add `is_active` check in `get_current_user` (currently missing)
+- [x] Validate JWT subject — guard malformed `sub` (UUID parse) → 401
+- [x] Reject inactive users — add `is_active` check in `get_current_user` (currently missing)
 - [ ] `Settings.assert_production_ready()` — abort startup in production when `jwt_secret` is default/empty or required provider keys are missing; call in `main.py` lifespan
 - [ ] Tests: inactive → 401, unknown/malformed sub → 401, prod+default secret aborts, dev tolerates
 

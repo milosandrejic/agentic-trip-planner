@@ -18,10 +18,21 @@ from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 from trip_planner.tools.flight_search import flight_search_tool
 from trip_planner.tools.hotel_search import hotel_search_tool
+from trip_planner.tools.place_details import place_details_tool
+from trip_planner.tools.places_search import places_search_tool
+from trip_planner.tools.places_text_search import places_text_search_tool
 from trip_planner.tools.web_search import web_search_tool
 from trip_planner.tools.weather import weather_tool
 
-_TOOLS = [web_search_tool, weather_tool, flight_search_tool, hotel_search_tool]
+_TOOLS = [
+    web_search_tool,
+    weather_tool,
+    flight_search_tool,
+    hotel_search_tool,
+    places_search_tool,
+    places_text_search_tool,
+    place_details_tool,
+]
 
 _TRIAGE_PROMPT_TEMPLATE = (
     "Today is {today}. "
@@ -48,6 +59,11 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Always convert city names to IATA airport codes before calling flight_search (e.g. London → LHR, Paris → CDG). "
     "Use the hotel_search tool to find accommodation when the user provides a destination and travel dates. "
     "Pass the destination city name and its ISO 3166-1 alpha-2 country code (e.g. Paris → FR, Tokyo → JP). "
+    "Use the places_search tool to discover points of interest (attractions, restaurants, museums) in the "
+    "destination via Geoapify category keys (e.g. 'tourism.sights', 'catering.restaurant', 'entertainment.museum'). "
+    "Use the places_text_search tool to resolve a specific named place to its Google place_id. "
+    "Use the place_details tool with that place_id to fetch rich details (rating, opening hours, price level, "
+    "website) for your top picks only, since each detail lookup is a paid call. "
     "Always cite your sources by including the URL and title of pages you reference. "
     "Ask clarifying questions if the request is too vague to plan well."
 )
@@ -59,6 +75,8 @@ _FORMAT_PROMPT = (
     "Include weather summaries where the weather tool provided data. "
     "Populate the flights field with every flight option returned by the flight_search tool. "
     "Populate the hotels field with every hotel option returned by the hotel_search tool. "
+    "For each activity, populate the place fields (place_id, latitude, longitude, address, rating, "
+    "opening_hours, price_level, ticket_url) whenever the places tools provided that data. "
     "Include all sources discussed. "
     "Do not truncate or summarise days — output the full itinerary."
 )

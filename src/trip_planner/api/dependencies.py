@@ -35,10 +35,22 @@ ValidatedUserId = Annotated[str, Depends(require_token)]
 
 
 async def get_current_user(user_id: ValidatedUserId, db: DbSession) -> User:
-    """Fetch the User for an already-validated token. Raises 401 if user no longer exists."""
-    user = await user_repository.get_user_by_id(db, uuid.UUID(user_id))
+    """Fetch the User for an already-validated token.
+
+    Raises 401 if the subject is malformed, the user no longer exists, or the account is
+    inactive.
+    """
+    try:
+        parsed_user_id = uuid.UUID(user_id)
+    except ValueError:
+        raise _credentials_error
+
+    user = await user_repository.get_user_by_id(db, parsed_user_id)
 
     if user is None:
+        raise _credentials_error
+
+    if not user.is_active:
         raise _credentials_error
 
     return user
