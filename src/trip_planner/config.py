@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     # Travel APIs (Phase 5)
     duffel_api_key: str = ""
     liteapi_key: str = ""
+    geoapify_api_key: str = ""
 
     # Observability
     langsmith_tracing: bool = False

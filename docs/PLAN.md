@@ -108,7 +108,7 @@
 - [x] Extend `Itinerary` with `hotels: list[HotelOption]` (optional, default empty)
 
 ### 5c — Places / POI (Geoapify + Google Places)
-- [ ] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
+- [x] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
 - [ ] Build `tools/place_details.py` — Google Places Details for top N picks only
 - [ ] Build `tools/places_text_search.py` — Google Places Text Search for named lookups
 - [ ] Extend `Activity` with `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url` (all optional)
@@ -127,57 +127,106 @@
 - [ ] Define `TravelLeg`: `mode` (walk / transit / drive), `duration_min`, `distance_m`
 - [ ] Extend `Activity` with `travel_from_previous: TravelLeg | None`
 
-## Phase 6 — Multi-Agent Orchestration
+---
 
-- [ ] Refactor single ReAct graph into supervisor + subgraphs:
-  - `supervisor` — routes to specialists, composes final itinerary
-  - `flight_agent` — owns `flight_search`
-  - `hotel_agent` — owns `hotel_search`
-  - `itinerary_agent` — owns `weather` + `places` + `web_search`
-- [ ] Use LangGraph `Send` API for parallel fan-out (flights + hotels in parallel)
-- [ ] Shared state with reducers for merging partial results
-- [ ] Add SSE streaming: `POST /trips/{id}/messages/stream`
-- [ ] Benchmark single-agent vs multi-agent latency on 5 sample queries
+# Phase X — Architecture Hardening
+
+> **Goal:** Take the backend from learning-project to production/market-ready (web + mobile).
+> Sequenced into ordered waves; execute one wave at a time, keeping the project working after
+> each. **Phase 5c (Places/POI) stays the immediate priority** — hardening only interrupts
+> feature work if a task *directly* blocks 5c. Two lifecycle concepts coexist deliberately:
+> **Thread** status (Wave 4, conversation/execution) vs **Trip** status (Wave 7, travel planning).
+
+## Wave 1 — Security & Startup Hardening
+
+- [ ] Validate JWT subject — guard malformed `sub` (UUID parse) → 401
+- [ ] Reject inactive users — add `is_active` check in `get_current_user` (currently missing)
+- [ ] `Settings.assert_production_ready()` — abort startup in production when `jwt_secret` is default/empty or required provider keys are missing; call in `main.py` lifespan
+- [ ] Tests: inactive → 401, unknown/malformed sub → 401, prod+default secret aborts, dev tolerates
+
+## Wave 2 — Transaction Lifetime + Stateless vs Stateful Graph
+
+- [ ] Split graphs: stateless compiled graph (no checkpointer) for `/trips/plan`; stateful (`AsyncPostgresSaver`) for threads; update `init_graph`/`build_graph`/`run_planner` to select
+- [ ] `/trips/plan` creates **no** checkpoint rows
+- [ ] Reduce transaction lifetime in `threads.py`: Validate → Persist request → **commit** → Run AI (outside txn) → Persist response → **commit** (no txn held across `run_planner`)
+- [ ] Tests: `/trips/plan` creates no checkpoint; thread flow commits request before AI; ownership preserved
+
+## Wave 3 — Structured Tool Outputs + LLM Separation + Graph State + Safety Limits
+
+- [ ] Canonical `ToolResult` contract shared by every tool (Flights, Hotels, Places, Weather, future Events/Maps): `status`, `provider`, `provider_request_id`, `latency_ms`, `cached`, `data`, `error`
+- [ ] Typed payloads: `FlightSearchResult`, `HotelSearchResult`, `WeatherResult`, `PlacesResult` (preserve provider IDs, prices, coordinates, metadata)
+- [ ] Tools return `ToolResult` via LangChain `content_and_artifact` (readable text for LLM + typed object in state)
+- [ ] `format_node` consumes structured `tool_results` from state — no reparsing tool text through the LLM
+- [ ] Separate LLM configs for triage / reasoning / structured formatting; deterministic temperature (0) for triage + structured output
+- [ ] Improve graph state: remove unused fields (e.g. `draft_itinerary`); separate `current_itinerary` / `pending_clarification` / `tool_results`; prevent stale state across runs
+- [ ] Graph safety limits: recursion limit, max-tool-calls guard, overall timeout (`asyncio.wait_for`); scaffold cost-tracking counter in state
+- [ ] Tests: `ToolResult` envelope per tool (success/empty/error, retryable, latency, provider); format from structured results; per-node model wiring; recursion/timeout
+
+## Wave 4 — Follow-up Triage + Memory Ownership + Thread Lifecycle
+
+- [ ] Follow-up aware triage — use conversation history, classify intent: New Trip | Itinerary Modification | Clarification Answer | Trip Question; do **not** re-clarify when an itinerary already exists
+- [ ] Define memory ownership: LangGraph checkpoint = execution state; application DB (threads/messages) = user-visible conversation
+- [ ] Thread lifecycle `status` column (Pending / Running / Ready / Failed / Deleted) + Alembic migration + transitions
+- [ ] Tests: follow-up modification (no re-clarify), clarification answer flow, intent classification, status transitions
+
+## Wave 5 — Stable Pagination + Bulk Soft Delete
+
+- [ ] Composite `(created_at, id)` cursor for message listing; add pagination to thread listing (currently unpaginated)
+- [ ] Replace row-by-row loop in `soft_delete_by_thread` with a single bulk `UPDATE`
+- [ ] Tests: pagination stable under same-timestamp rows; bulk delete in one statement
+
+## Wave 6 — Shared HTTP Clients + Retry Resilience
+
+- [ ] Lifespan-managed pooled `httpx.AsyncClient`(s) injected into service clients (replace per-request `AsyncClient`)
+- [ ] Retry on network failures (`ConnectError`, `TimeoutException`, connection resets) in addition to 429/5xx; handle non-JSON error bodies gracefully
+- [ ] Tests: retries on `ConnectError`/timeout; non-JSON error handled; shared client reused
+
+## Wave 7 — Domain Model Evolution: Trip, ItineraryVersion, Place, Selections
+
+> Deferred: start **after** the Places domain is complete and **before** the Frontend phase. Largest wave — plan as its own sub-plan first.
+
+- [ ] Introduce `Trip` + `ItineraryVersion` — stop storing itinerary JSON only inside assistant messages; persist versioned itineraries (edit/version/rollback)
+- [ ] Trip lifecycle states: Draft / Generating / Ready / Completed / Archived (status column + transitions)
+- [ ] Provider-independent `Place` model (provider, external_id, coordinates, metadata) so activities aren't coupled to provider IDs
+- [ ] Persist Selected Flight / Selected Hotel separately from search results
+- [ ] Tests: trip versioning/rollback, status transitions, place normalization, selection persistence
+
+## Wave 8 — Trip Validation Engine (future product)
+
+- [ ] Post-generation pipeline: Generate → Route optimization → Constraint validation → Repair invalid days
+- [ ] Validate opening hours, travel time, weather conflicts, arrival/departure constraints, activity overlap
+- [ ] Tests: constraint violations detected + repaired; validated itinerary output
+
+> **Deferred to post-MVP:** checkpoint cleanup / retention policy (tied to account deletion
+> + GDPR), cost tracking, deeper observability.
 
 ---
 
-# Part D — Evaluation & Production Hardening
+# Part D — Clients
 
-## Phase 7 — Evaluation & Observability
+## Phase 6 — Web Frontend
 
-- [ ] Build golden set: 15 trip queries in `eval/golden_set.json`
-- [ ] Build `scripts/eval_agent.py` — schema validity, tool-call correctness, hallucinated-place detection (verify via Geoapify)
-- [ ] Track per-run: tokens, $ cost, latency, tool-call count → `eval/results/<timestamp>.json`
-- [ ] Add LangSmith datasets + LLM-as-judge evaluators
-- [ ] Create `POST /feedback` endpoint (thumbs up/down per message)
+- [ ] Choose stack (Next.js + TypeScript + Tailwind) and scaffold the app
+- [ ] Auth flow: register / login, JWT storage, protected routes, logout
+- [ ] Typed API client with loading + error states
+- [ ] Trip planning chat UI: thread list, message thread, send message, clarification prompts
+- [ ] Render structured itinerary: days, activities, flights, hotels, places (map view)
+- [ ] Thread history with pagination; create / delete thread
+- [ ] Responsive layout (desktop + mobile web)
+- [ ] Deploy (Vercel or container) with environment config
 
-## Phase 8 — Production Hardening
+## Phase 7 — Mobile App
 
-- [ ] Per-user rate limiting (`slowapi`)
-- [ ] Per-user monthly budget cap (`user_budgets` table; reject when exceeded)
-- [ ] Redis response cache for external API calls (Duffel, hotels, events) with per-source TTL
-- [ ] Background processing for long plans (FastAPI `BackgroundTasks` or `arq`)
-- [ ] Structured error taxonomy (`parse_error`, `tool_error`, `quota_error`, `auth_error`)
-- [ ] OpenAPI docs polish, example payloads
-- [ ] CI: GitHub Actions (ruff + pytest + docker build)
+- [ ] Choose stack (React Native + Expo) and scaffold the app
+- [ ] Reuse auth + typed API client (login, token storage via secure storage)
+- [ ] Chat + itinerary screens (native navigation)
+- [ ] Native itinerary rendering with maps and share sheet
+- [ ] Offline cache of the latest itinerary per thread
+- [ ] Build + internal distribution (TestFlight / Play internal testing)
 
 ---
 
-# Part E — Personalization & Recommendations
-
-## Phase 9 — User Preferences
-
-- [ ] Create `UserProfile` model: `interests`, `favorite_teams`, `favorite_artists`, `dietary`, `pace`, `budget_tier`, `accessibility`
-- [ ] Endpoints: `GET /me/preferences`, `PUT /me/preferences`
-- [ ] Onboarding flow: first-time `/trips/plan` triggers preferences prompt if profile empty
-- [ ] Inject preferences into agent system prompt (`PreferenceContext` section)
-- [ ] Bias `event_search` to auto-include favorite artists / teams when planning matching dates
-- [ ] Eval: compare itinerary quality with/without preferences on same query (LangSmith A/B)
-
-## Phase 10 — Implicit Signals & Trip History
-
-- [ ] Create `ActivityFeedback` model: per-activity thumbs (from Phase 7) + swapped-out events
-- [ ] Nightly job: aggregate signals → update `UserProfile.derived_interests`
-- [ ] Past-trip retrieval: embed completed itineraries, retrieve top-k similar past trips, inject as few-shot examples
-- [ ] Add `Itinerary.recommendation_notes` with "because you liked X in Y" reasoning trace
-- [ ] Privacy: `DELETE /me/preferences`, `DELETE /me/history`
+> **MVP ends here.** Once the web and mobile apps are usable, evaluate the product on real
+> usage before planning further. Post-MVP candidates (Evaluation, Multi-agent orchestration,
+> Personalization, Recommendations, Production scaling, Redis, Background jobs, Cost
+> optimization, Analytics) will be planned then based on real usage.
