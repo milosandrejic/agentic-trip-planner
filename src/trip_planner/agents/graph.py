@@ -3,7 +3,7 @@ import uuid
 from datetime import date
 from typing import Literal, cast
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -16,6 +16,7 @@ from trip_planner.agents.state import TripPlannerState
 from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
+from trip_planner.services.types import ToolResult
 from trip_planner.tools.discover_places import discover_places_tool
 from trip_planner.tools.find_place_by_name import find_place_by_name_tool
 from trip_planner.tools.flight_search import flight_search_tool
@@ -155,10 +156,44 @@ async def reason_node(state: TripPlannerState) -> TripPlannerState:
     )
 
 
+def _as_structured_tool_message(message: ToolMessage) -> ToolMessage:
+    """Replace a tool message's human-readable text with its structured ToolResult payload.
+
+    The formatter reads authoritative typed data (provider IDs, prices, coordinates) straight
+    from the tool's artifact instead of reparsing the summary text the tool produced for the
+    reasoning LLM. The artifact is preserved so downstream consumers keep the typed object.
+    """
+    result = message.artifact
+    return ToolMessage(
+        content=result.model_dump_json(),
+        tool_call_id=message.tool_call_id,
+        name=message.name,
+        artifact=result,
+    )
+
+
+def _with_structured_tool_results(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Swap each artifact-bearing tool message for its structured ToolResult representation.
+
+    Tool messages without a ToolResult artifact (e.g. web search) keep their original text.
+    """
+    structured: list[BaseMessage] = []
+    for message in messages:
+        is_structured_tool = isinstance(message, ToolMessage) and isinstance(
+            message.artifact, ToolResult
+        )
+        if is_structured_tool:
+            structured.append(_as_structured_tool_message(cast(ToolMessage, message)))
+        else:
+            structured.append(message)
+    return structured
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Force the conversation into a structured Itinerary via with_structured_output."""
     format_instruction = SystemMessage(content=_FORMAT_PROMPT)
-    messages_with_instruction = list(state["messages"]) + [format_instruction]
+    structured_messages = _with_structured_tool_results(list(state["messages"]))
+    messages_with_instruction = structured_messages + [format_instruction]
 
     itinerary = cast(Itinerary, await _llm_structured.ainvoke(messages_with_instruction))
 

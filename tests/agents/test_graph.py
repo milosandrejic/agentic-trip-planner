@@ -2,7 +2,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 import trip_planner.agents.graph as graph_module
 from trip_planner.agents.graph import (
@@ -17,6 +17,7 @@ from trip_planner.agents.graph import (
 from trip_planner.agents.state import TripPlannerState
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
+from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
 
 
 def _make_state(messages: list[object], *, draft: str = "") -> TripPlannerState:
@@ -94,6 +95,61 @@ async def test_format_node_returns_structured_itinerary() -> None:
 
     assert result.get("itinerary") == itinerary
     assert result["trip_request"] == "Paris 7 days"
+
+
+async def test_format_node_feeds_structured_tool_results_to_llm() -> None:
+    itinerary = _make_itinerary()
+    offer = FlightOffer(
+        offer_id="off_1",
+        airline="British Airways",
+        stops=0,
+        total_amount="250.00",
+        currency="GBP",
+        outbound_date="2026-08-01",
+    )
+    payload = FlightSearchResult(
+        origin="LHR",
+        destination="CDG",
+        departure_date="2026-08-01",
+        passengers=1,
+        offers=[offer],
+    )
+    flight_result = ToolResult.ok(provider="duffel", data=payload)
+
+    structured_tool_msg = ToolMessage(
+        content="Option 1: British Airways",
+        tool_call_id="call_1",
+        name="flight_search_tool",
+        artifact=flight_result,
+    )
+    web_tool_msg = ToolMessage(
+        content="Raw web search text", tool_call_id="call_2", name="web_search"
+    )
+    state = _make_state([HumanMessage(content="Paris"), structured_tool_msg, web_tool_msg])
+
+    captured: dict[str, list[BaseMessage]] = {}
+
+    async def capture(messages: list[BaseMessage]) -> Itinerary:
+        captured["messages"] = messages
+        return itinerary
+
+    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(side_effect=capture)
+        result = await format_node(state)
+
+    sent = captured["messages"]
+    flight_sent = next(
+        m for m in sent if isinstance(m, ToolMessage) and m.tool_call_id == "call_1"
+    )
+    web_sent = next(m for m in sent if isinstance(m, ToolMessage) and m.tool_call_id == "call_2")
+
+    # the structured tool message now carries the authoritative typed payload, not the summary
+    assert flight_sent.content == flight_result.model_dump_json()
+    assert "off_1" in flight_sent.content
+    assert "Option 1" not in flight_sent.content
+    # text-only tool output (web search) is left untouched
+    assert web_sent.content == "Raw web search text"
+    assert result.get("itinerary") == itinerary
 
 
 # --- _route_after_triage ---
