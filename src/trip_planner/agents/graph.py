@@ -122,7 +122,7 @@ _llm_triage = _triage_llm.with_structured_output(_TriageDecision)
 
 def _route_after_triage(state: TripPlannerState) -> Literal["reason", "__end__"]:
     """Route to reason if the request is complete, or end with a clarification response."""
-    has_clarification = state.get("clarification") is not None
+    has_clarification = state.get("pending_clarification") is not None
     return "__end__" if has_clarification else "reason"
 
 
@@ -146,11 +146,14 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
 
     clarification = decision.clarification if decision.should_clarify else None
 
+    # Reset transient outputs so a resumed thread never reads a previous turn's itinerary
+    # or tool results (this graph is checkpointed and re-entered on follow-up messages).
     return TripPlannerState(
         messages=[],
         trip_request=state["trip_request"],
-        draft_itinerary=state["draft_itinerary"],
-        clarification=clarification,
+        tool_results=[],
+        current_itinerary=None,
+        pending_clarification=clarification,
     )
 
 
@@ -165,7 +168,6 @@ async def reason_node(state: TripPlannerState) -> TripPlannerState:
     return TripPlannerState(
         messages=[response],
         trip_request=state["trip_request"],
-        draft_itinerary=state["draft_itinerary"],
     )
 
 
@@ -202,10 +204,24 @@ def _with_structured_tool_results(messages: list[BaseMessage]) -> list[BaseMessa
     return structured
 
 
+def _collect_tool_results(messages: list[BaseMessage]) -> list[ToolResult[BaseModel]]:
+    """Gather the structured ToolResult artifacts attached to the conversation's tool messages.
+
+    Exposing the typed provider payloads on the state (rather than only as message artifacts)
+    gives the API layer and future cost tracking a first-class handle on what the tools returned.
+    """
+    results: list[ToolResult[BaseModel]] = []
+    for message in messages:
+        if isinstance(message, ToolMessage) and isinstance(message.artifact, ToolResult):
+            results.append(cast("ToolResult[BaseModel]", message.artifact))
+    return results
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Force the conversation into a structured Itinerary via with_structured_output."""
     format_instruction = SystemMessage(content=_FORMAT_PROMPT)
-    structured_messages = _with_structured_tool_results(list(state["messages"]))
+    conversation = list(state["messages"])
+    structured_messages = _with_structured_tool_results(conversation)
     messages_with_instruction = structured_messages + [format_instruction]
 
     itinerary = cast(Itinerary, await _llm_structured.ainvoke(messages_with_instruction))
@@ -213,8 +229,8 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
     return TripPlannerState(
         messages=[],
         trip_request=state["trip_request"],
-        draft_itinerary=state["draft_itinerary"],
-        itinerary=itinerary,
+        tool_results=_collect_tool_results(conversation),
+        current_itinerary=itinerary,
     )
 
 

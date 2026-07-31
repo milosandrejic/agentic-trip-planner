@@ -15,12 +15,11 @@ async def plan_trip(body: TripPlanRequest, _current_user: CurrentUser) -> TripPl
     initial_state = TripPlannerState(
         messages=[HumanMessage(content=body.query)],
         trip_request=body.query,
-        draft_itinerary="",
     )
 
     result = await run_planner(initial_state)
 
-    itinerary = result.get("itinerary")
+    itinerary = result.get("current_itinerary")
     if itinerary is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

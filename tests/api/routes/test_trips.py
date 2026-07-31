@@ -38,8 +38,7 @@ def make_plan_result(itinerary: Itinerary | None = None) -> TripPlannerState:
     return TripPlannerState(
         messages=[HumanMessage(content="Paris 7 days"), AIMessage(content="Here is your itinerary.")],
         trip_request="Paris 7 days",
-        draft_itinerary="",
-        itinerary=resolved,
+        current_itinerary=resolved,
     )
 
 
@@ -156,7 +155,6 @@ async def test_plan_trip_passes_query_to_planner(db_client: AsyncClient) -> None
 
     called_state: TripPlannerState = mock_planner.call_args[0][0]
     assert called_state["trip_request"] == query
-    assert called_state["draft_itinerary"] == ""
     assert called_state["messages"][0].content == query
 
 
@@ -166,7 +164,6 @@ async def test_plan_trip_raises_500_when_graph_returns_no_itinerary(db_client: A
     empty_result = TripPlannerState(
         messages=[],
         trip_request="Paris 7 days",
-        draft_itinerary="",
     )
 
     with (

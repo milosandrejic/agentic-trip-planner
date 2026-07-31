@@ -42,8 +42,7 @@ def make_plan_result(itinerary: Itinerary | None = None) -> TripPlannerState:
     return TripPlannerState(
         messages=[human_msg, ai_msg],
         trip_request="Paris 7 days",
-        draft_itinerary="",
-        itinerary=resolved,
+        current_itinerary=resolved,
     )
 
 
@@ -55,8 +54,7 @@ def make_clarification_result(message: str = "Could you tell me where and how lo
     return TripPlannerState(
         messages=[],
         trip_request="plan me a trip",
-        draft_itinerary="",
-        clarification=clarification,
+        pending_clarification=clarification,
     )
 
 
@@ -220,7 +218,7 @@ async def test_create_thread_returns_500_when_graph_returns_no_itinerary(
     user = make_mock_user()
     token = create_access_token(str(user.id))
     thread = make_mock_thread(user.id)
-    empty_result = TripPlannerState(messages=[], trip_request="Paris 7 days", draft_itinerary="")
+    empty_result = TripPlannerState(messages=[], trip_request="Paris 7 days")
 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
@@ -413,7 +411,7 @@ async def test_send_message_returns_500_when_graph_returns_no_itinerary(
     user = make_mock_user()
     token = create_access_token(str(user.id))
     thread = make_mock_thread(user.id)
-    empty_result = TripPlannerState(messages=[], trip_request="", draft_itinerary="")
+    empty_result = TripPlannerState(messages=[], trip_request="")
 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
@@ -685,7 +683,7 @@ async def test_create_thread_returns_201_with_clarification_when_request_is_vagu
     assert response.status_code == 201
     body = response.json()
     assert body["result"]["type"] == "clarification"
-    expected_clarification = result.get("clarification")
+    expected_clarification = result.get("pending_clarification")
     assert expected_clarification is not None
     assert body["result"]["clarification"]["message"] == expected_clarification.message
     assert "destination" in body["result"]["clarification"]["missing_fields"]
@@ -751,6 +749,6 @@ async def test_send_message_returns_200_with_clarification_on_vague_follow_up(
     assert response.status_code == 200
     body = response.json()
     assert body["result"]["type"] == "clarification"
-    expected_clarification = result.get("clarification")
+    expected_clarification = result.get("pending_clarification")
     assert expected_clarification is not None
     assert body["result"]["clarification"]["message"] == expected_clarification.message

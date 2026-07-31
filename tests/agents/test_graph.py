@@ -20,11 +20,10 @@ from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
 from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
 
 
-def _make_state(messages: list[object], *, draft: str = "") -> TripPlannerState:
+def _make_state(messages: list[object]) -> TripPlannerState:
     return TripPlannerState(
         messages=messages,  # type: ignore[arg-type]
         trip_request="Paris 7 days",
-        draft_itinerary=draft,
     )
 
 
@@ -79,7 +78,6 @@ async def test_agent_node_returns_updated_messages() -> None:
 
     assert ai_response in result["messages"]
     assert result["trip_request"] == "Paris 7 days"
-    assert result["draft_itinerary"] == ""
 
 
 # --- format_node ---
@@ -93,7 +91,7 @@ async def test_format_node_returns_structured_itinerary() -> None:
         mock_llm.ainvoke = AsyncMock(return_value=itinerary)
         result = await format_node(state)
 
-    assert result.get("itinerary") == itinerary
+    assert result.get("current_itinerary") == itinerary
     assert result["trip_request"] == "Paris 7 days"
 
 
@@ -149,7 +147,9 @@ async def test_format_node_feeds_structured_tool_results_to_llm() -> None:
     assert "Option 1" not in flight_sent.content
     # text-only tool output (web search) is left untouched
     assert web_sent.content == "Raw web search text"
-    assert result.get("itinerary") == itinerary
+    assert result.get("current_itinerary") == itinerary
+    # the typed tool payloads are surfaced on the state, web-search text is excluded
+    assert result.get("tool_results") == [flight_result]
 
 
 # --- _route_after_triage ---
@@ -163,8 +163,7 @@ def test_route_after_triage_returns_end_when_clarification_is_set() -> None:
     state = TripPlannerState(
         messages=[],
         trip_request="plan me a trip",
-        draft_itinerary="",
-        clarification=clarification,
+        pending_clarification=clarification,
     )
 
     result = _route_after_triage(state)
@@ -176,7 +175,6 @@ def test_route_after_triage_returns_reason_when_no_clarification() -> None:
     state = TripPlannerState(
         messages=[HumanMessage(content="Paris 7 days")],
         trip_request="Paris 7 days",
-        draft_itinerary="",
     )
 
     result = _route_after_triage(state)
@@ -199,14 +197,13 @@ async def test_triage_node_sets_clarification_when_llm_decides_to_clarify() -> N
     state = TripPlannerState(
         messages=[HumanMessage(content="plan me a trip")],
         trip_request="plan me a trip",
-        draft_itinerary="",
     )
 
     with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
         mock_triage.ainvoke = AsyncMock(return_value=decision)
         result = await triage_node(state)
 
-    assert result.get("clarification") == clarification
+    assert result.get("pending_clarification") == clarification
     assert result["trip_request"] == "plan me a trip"
 
 
@@ -217,15 +214,31 @@ async def test_triage_node_sets_clarification_to_none_when_request_is_complete()
     state = TripPlannerState(
         messages=[HumanMessage(content="Paris 7 days in July, I like history")],
         trip_request="Paris 7 days in July, I like history",
-        draft_itinerary="",
     )
 
     with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
         mock_triage.ainvoke = AsyncMock(return_value=decision)
         result = await triage_node(state)
 
-    assert result.get("clarification") is None
+    assert result.get("pending_clarification") is None
     assert result["trip_request"] == "Paris 7 days in July, I like history"
+
+
+async def test_triage_node_resets_transient_state_for_resumed_threads() -> None:
+    from trip_planner.agents.graph import _TriageDecision
+
+    decision = _TriageDecision(should_clarify=False, clarification=None)
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days in July")],
+        trip_request="Paris 7 days in July",
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("current_itinerary") is None
+    assert result.get("tool_results") == []
 
 
 # --- run_planner graph selection ---

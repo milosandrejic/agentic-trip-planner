@@ -84,12 +84,11 @@ async def create_thread(
     initial_state = TripPlannerState(
         messages=[HumanMessage(content=body.query)],
         trip_request=body.query,
-        draft_itinerary="",
     )
     result = await run_planner(initial_state, thread_id=str(thread.id))
 
-    clarification = result.get("clarification")
-    itinerary = result.get("itinerary")
+    clarification = result.get("pending_clarification")
+    itinerary = result.get("current_itinerary")
 
     if clarification is not None:
         await message_repository.create_message(
@@ -149,13 +148,12 @@ async def send_message(
     follow_up_state = TripPlannerState(
         messages=[HumanMessage(content=body.query)],
         trip_request=body.query,
-        draft_itinerary="",
     )
 
     result = await run_planner(follow_up_state, thread_id=str(thread.id))
 
-    clarification = result.get("clarification")
-    itinerary = result.get("itinerary")
+    clarification = result.get("pending_clarification")
+    itinerary = result.get("current_itinerary")
 
     if clarification is not None:
         await message_repository.create_message(
