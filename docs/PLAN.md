@@ -160,7 +160,7 @@
 - [x] Typed payloads: `FlightSearchResult`, `HotelSearchResult`, `WeatherResult`, `PlacesResult` (preserve provider IDs, prices, coordinates, metadata)
 - [x] Tools return `ToolResult` via LangChain `content_and_artifact` (readable text for LLM + typed object in state)
 - [x] `format_node` consumes structured `tool_results` from state — no reparsing tool text through the LLM
-- [ ] Separate LLM configs for triage / reasoning / structured formatting; deterministic temperature (0) for triage + structured output
+- [x] Separate LLM configs for triage / reasoning / structured formatting; deterministic temperature (0) for triage + structured output
 - [ ] Improve graph state: remove unused fields (e.g. `draft_itinerary`); separate `current_itinerary` / `pending_clarification` / `tool_results`; prevent stale state across runs
 - [ ] Graph safety limits: recursion limit, max-tool-calls guard, overall timeout (`asyncio.wait_for`); scaffold cost-tracking counter in state
 - [ ] Tests: `ToolResult` envelope per tool (success/empty/error, retryable, latency, provider); format from structured results; per-node model wiring; recursion/timeout

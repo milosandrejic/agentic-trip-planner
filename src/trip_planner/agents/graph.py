@@ -84,14 +84,27 @@ _FORMAT_PROMPT = (
 
 _settings = get_settings()
 
-_llm = ChatOpenAI(
-    model=_settings.openai_model,
-    api_key=SecretStr(_settings.openai_api_key),
-    temperature=0.7,
-)
+_REASONING_TEMPERATURE = 0.7
+_DETERMINISTIC_TEMPERATURE = 0.0
 
-_llm_with_tools = _llm.bind_tools(_TOOLS)
-_llm_structured = _llm.with_structured_output(Itinerary)
+
+def _build_llm(temperature: float) -> ChatOpenAI:
+    """Create a ChatOpenAI client for the configured model at the given temperature."""
+    return ChatOpenAI(
+        model=_settings.openai_model,
+        api_key=SecretStr(_settings.openai_api_key),
+        temperature=temperature,
+    )
+
+
+# Reasoning stays creative; triage and structured formatting are deterministic (temperature 0)
+# so completeness checks and the final itinerary are stable across runs.
+_reasoning_llm = _build_llm(_REASONING_TEMPERATURE)
+_triage_llm = _build_llm(_DETERMINISTIC_TEMPERATURE)
+_format_llm = _build_llm(_DETERMINISTIC_TEMPERATURE)
+
+_llm_with_tools = _reasoning_llm.bind_tools(_TOOLS)
+_llm_structured = _format_llm.with_structured_output(Itinerary)
 
 
 class _TriageDecision(BaseModel):
@@ -104,7 +117,7 @@ class _TriageDecision(BaseModel):
     )
 
 
-_llm_triage = _llm.with_structured_output(_TriageDecision)
+_llm_triage = _triage_llm.with_structured_output(_TriageDecision)
 
 
 def _route_after_triage(state: TripPlannerState) -> Literal["reason", "__end__"]:

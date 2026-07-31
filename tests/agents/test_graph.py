@@ -279,3 +279,23 @@ def test_init_graph_compiles_graph_with_checkpointer() -> None:
         assert graph_module._compiled_graph is compiled
 
     mock_build.assert_called_once_with(checkpointer=checkpointer)
+
+
+# --- per-node LLM configuration ---
+
+
+def test_triage_llm_is_deterministic() -> None:
+    assert graph_module._triage_llm.temperature == 0.0
+
+
+def test_format_llm_is_deterministic() -> None:
+    assert graph_module._format_llm.temperature == 0.0
+
+
+def test_reasoning_llm_is_creative() -> None:
+    assert graph_module._reasoning_llm.temperature == 0.7
+
+
+def test_per_node_llms_are_distinct_instances() -> None:
+    llms = {id(graph_module._triage_llm), id(graph_module._format_llm), id(graph_module._reasoning_llm)}
+    assert len(llms) == 3
