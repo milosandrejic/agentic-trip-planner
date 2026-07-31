@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from trip_planner.tools.places_text_search import _format_results, places_text_search_tool
+from trip_planner.tools.find_place_by_name import _format_results, find_place_by_name_tool
 
 _TEXT_SEARCH_RESPONSE = {
     "places": [
@@ -74,37 +74,37 @@ def test_format_results_handles_missing_display_name() -> None:
     assert "ChIJxyz" in result
 
 
-# --- places_text_search_tool ---
+# --- find_place_by_name_tool ---
 
 
-async def test_places_text_search_tool_returns_formatted_string_on_success() -> None:
+async def test_find_place_by_name_tool_returns_formatted_string_on_success() -> None:
     mock_cls = _patch_client(_make_mock_response(_TEXT_SEARCH_RESPONSE))
 
-    with patch("trip_planner.tools.places_text_search.httpx.AsyncClient", mock_cls):
-        result = await places_text_search_tool.ainvoke({"query": "Eiffel Tower"})
+    with patch("trip_planner.tools.find_place_by_name.httpx.AsyncClient", mock_cls):
+        result = await find_place_by_name_tool.ainvoke({"query": "Eiffel Tower"})
 
     assert "Eiffel Tower" in result
     assert "ChIJLU7jZClu5kcR4PcOOO6p3I0" in result
 
 
-async def test_places_text_search_tool_returns_no_places_when_empty() -> None:
+async def test_find_place_by_name_tool_returns_no_places_when_empty() -> None:
     mock_cls = _patch_client(_make_mock_response({"places": []}))
 
-    with patch("trip_planner.tools.places_text_search.httpx.AsyncClient", mock_cls):
-        result = await places_text_search_tool.ainvoke({"query": "Nonexistent place xyz"})
+    with patch("trip_planner.tools.find_place_by_name.httpx.AsyncClient", mock_cls):
+        result = await find_place_by_name_tool.ainvoke({"query": "Nonexistent place xyz"})
 
     assert result == "No places found for this query."
 
 
-async def test_places_text_search_tool_returns_error_string_on_http_error() -> None:
+async def test_find_place_by_name_tool_returns_error_string_on_http_error() -> None:
     mock_response = _make_mock_response({})
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
         "429", request=MagicMock(), response=MagicMock(status_code=429)
     )
     mock_cls = _patch_client(mock_response)
 
-    with patch("trip_planner.tools.places_text_search.httpx.AsyncClient", mock_cls):
-        result = await places_text_search_tool.ainvoke({"query": "Eiffel Tower"})
+    with patch("trip_planner.tools.find_place_by_name.httpx.AsyncClient", mock_cls):
+        result = await find_place_by_name_tool.ainvoke({"query": "Eiffel Tower"})
 
     assert "unavailable" in result
     assert "429" in result

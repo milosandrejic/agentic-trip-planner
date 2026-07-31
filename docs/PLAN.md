@@ -108,10 +108,10 @@
 - [x] Extend `Itinerary` with `hotels: list[HotelOption]` (optional, default empty)
 
 ### 5c — Places / POI (Geoapify + Google Places)
-- [x] Build `tools/places_search.py` — Geoapify Places API (categories, radius)
+- [x] Build `tools/discover_places.py` — Geoapify Places API (categories, radius)
 - [x] Build `tools/place_details.py` — Google Places Details for top N picks only
-- [x] Build `tools/places_text_search.py` — Google Places Text Search for named lookups
-- [x] Register the three places tools with the agent, update prompt (search → text-search → details flow)
+- [x] Build `tools/find_place_by_name.py` — Google Places Text Search for named lookups
+- [x] Register the three places tools with the agent, update prompt (discover → find-by-name → details flow)
 - [x] Extend `Activity` with `place_id`, `coordinates`, `address`, `rating`, `opening_hours`, `price_level`, `price_eur`, `ticket_url`, `photo_url` (all optional)
 
 ### 5d — Events (Ticketmaster Discovery)
@@ -156,9 +156,9 @@
 
 ## Wave 3 — Structured Tool Outputs + LLM Separation + Graph State + Safety Limits
 
-- [ ] Canonical `ToolResult` contract shared by every tool (Flights, Hotels, Places, Weather, future Events/Maps): `status`, `provider`, `provider_request_id`, `latency_ms`, `cached`, `data`, `error`
-- [ ] Typed payloads: `FlightSearchResult`, `HotelSearchResult`, `WeatherResult`, `PlacesResult` (preserve provider IDs, prices, coordinates, metadata)
-- [ ] Tools return `ToolResult` via LangChain `content_and_artifact` (readable text for LLM + typed object in state)
+- [x] Canonical `ToolResult` contract shared by every tool (Flights, Hotels, Places, Weather, future Events/Maps): `status`, `provider`, `provider_request_id`, `latency_ms`, `cached`, `data`, `error`
+- [x] Typed payloads: `FlightSearchResult`, `HotelSearchResult`, `WeatherResult`, `PlacesResult` (preserve provider IDs, prices, coordinates, metadata)
+- [x] Tools return `ToolResult` via LangChain `content_and_artifact` (readable text for LLM + typed object in state)
 - [ ] `format_node` consumes structured `tool_results` from state — no reparsing tool text through the LLM
 - [ ] Separate LLM configs for triage / reasoning / structured formatting; deterministic temperature (0) for triage + structured output
 - [ ] Improve graph state: remove unused fields (e.g. `draft_itinerary`); separate `current_itinerary` / `pending_clarification` / `tool_results`; prevent stale state across runs

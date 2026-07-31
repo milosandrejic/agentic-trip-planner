@@ -1,4 +1,5 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+import time
 from typing import Any
 
 import httpx
@@ -6,12 +7,14 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from trip_planner.config import get_settings
+from trip_planner.services.types import PlaceResult, ToolResult
 
 _DETAILS_URL = "https://places.googleapis.com/v1/places"
 _FIELD_MASK = (
     "displayName,formattedAddress,rating,userRatingCount,priceLevel,"
     "regularOpeningHours.weekdayDescriptions,websiteUri,internationalPhoneNumber,location"
 )
+_PROVIDER = "google-places"
 
 _settings = get_settings()
 
@@ -63,14 +66,37 @@ def _format_details(place: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-@tool(args_schema=_PlaceDetailsInput)
-async def place_details_tool(place_id: str) -> str:
+def _build_place_payload(place: dict[str, Any]) -> PlaceResult:
+    """Map a raw Google Place details response into a typed PlaceResult payload."""
+    display_name: dict[str, Any] = place.get("displayName", {})
+    location: dict[str, Any] = place.get("location", {})
+    opening_hours: dict[str, Any] = place.get("regularOpeningHours", {})
+    weekday_descriptions: list[str] = opening_hours.get("weekdayDescriptions", [])
+    price_level = place.get("priceLevel") or None
+
+    return PlaceResult(
+        name=display_name.get("text") or "Unknown place",
+        address=place.get("formattedAddress") or None,
+        latitude=location.get("latitude"),
+        longitude=location.get("longitude"),
+        rating=place.get("rating"),
+        user_rating_count=place.get("userRatingCount"),
+        price_level=price_level,
+        opening_hours=weekday_descriptions,
+        website_url=place.get("websiteUri") or None,
+        phone=place.get("internationalPhoneNumber") or None,
+    )
+
+
+@tool(args_schema=_PlaceDetailsInput, response_format="content_and_artifact")
+async def place_details_tool(place_id: str) -> tuple[str, ToolResult[PlaceResult]]:
     """Get detailed information about a specific place using its Google Places place ID.
 
     Returns the place's name, address, rating, price level, contact details, and opening
     hours. Use this only for the top few places you have already selected, since each call
     consumes a paid detail lookup.
     """
+    start = time.perf_counter()
     headers = {
         "X-Goog-Api-Key": _settings.google_places_api_key,
         "X-Goog-FieldMask": _FIELD_MASK,
@@ -83,10 +109,18 @@ async def place_details_tool(place_id: str) -> str:
             response.raise_for_status()
 
         place: dict[str, Any] = response.json()
-        return _format_details(place)
-
     except httpx.HTTPStatusError as exc:
-        return f"Place details unavailable: Google Places returned {exc.response.status_code}"
-
+        content = f"Place details unavailable: Google Places returned {exc.response.status_code}"
+        result: ToolResult[PlaceResult] = ToolResult[PlaceResult].fail(
+            provider=_PROVIDER, message=content, retryable=True
+        )
     except (KeyError, TypeError) as exc:
-        return f"Unexpected response from Google Places: {exc}"
+        content = f"Unexpected response from Google Places: {exc}"
+        result = ToolResult[PlaceResult].fail(provider=_PROVIDER, message=content)
+    else:
+        payload = _build_place_payload(place)
+        content = _format_details(place)
+        result = ToolResult.ok(provider=_PROVIDER, data=payload)
+
+    result.latency_ms = round((time.perf_counter() - start) * 1000, 2)
+    return content, result

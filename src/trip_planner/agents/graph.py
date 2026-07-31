@@ -16,11 +16,11 @@ from trip_planner.agents.state import TripPlannerState
 from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
+from trip_planner.tools.discover_places import discover_places_tool
+from trip_planner.tools.find_place_by_name import find_place_by_name_tool
 from trip_planner.tools.flight_search import flight_search_tool
 from trip_planner.tools.hotel_search import hotel_search_tool
 from trip_planner.tools.place_details import place_details_tool
-from trip_planner.tools.places_search import places_search_tool
-from trip_planner.tools.places_text_search import places_text_search_tool
 from trip_planner.tools.web_search import web_search_tool
 from trip_planner.tools.weather import weather_tool
 
@@ -29,8 +29,8 @@ _TOOLS = [
     weather_tool,
     flight_search_tool,
     hotel_search_tool,
-    places_search_tool,
-    places_text_search_tool,
+    discover_places_tool,
+    find_place_by_name_tool,
     place_details_tool,
 ]
 
@@ -59,9 +59,9 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Always convert city names to IATA airport codes before calling flight_search (e.g. London → LHR, Paris → CDG). "
     "Use the hotel_search tool to find accommodation when the user provides a destination and travel dates. "
     "Pass the destination city name and its ISO 3166-1 alpha-2 country code (e.g. Paris → FR, Tokyo → JP). "
-    "Use the places_search tool to discover points of interest (attractions, restaurants, museums) in the "
+    "Use the discover_places tool to discover points of interest (attractions, restaurants, museums) in the "
     "destination via Geoapify category keys (e.g. 'tourism.sights', 'catering.restaurant', 'entertainment.museum'). "
-    "Use the places_text_search tool to resolve a specific named place to its Google place_id. "
+    "Use the find_place_by_name tool to resolve a specific named place to its Google place_id. "
     "Use the place_details tool with that place_id to fetch rich details (rating, opening hours, price level, "
     "website) for your top picks only, since each detail lookup is a paid call. "
     "Always cite your sources by including the URL and title of pages you reference. "

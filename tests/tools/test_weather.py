@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from trip_planner.tools.weather import _fetch_coordinates, _fetch_forecast, weather_tool
+from trip_planner.services.types import WeatherDay
+from trip_planner.tools.weather import _fetch_coordinates, _fetch_daily, weather_tool
 
 _GEOCODING_RESPONSE = {
     "results": [
@@ -60,7 +61,7 @@ async def test_fetch_coordinates_raises_for_unknown_city() -> None:
             await _fetch_coordinates("Atlantis")
 
 
-async def test_fetch_forecast_returns_formatted_lines() -> None:
+async def test_fetch_daily_returns_typed_weather_days() -> None:
     mock_response = _make_mock_response(_FORECAST_RESPONSE)
 
     with patch("trip_planner.tools.weather.httpx.AsyncClient") as mock_client_cls:
@@ -69,24 +70,29 @@ async def test_fetch_forecast_returns_formatted_lines() -> None:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_response)
 
-        lines = await _fetch_forecast(48.8566, 2.3522, "2024-07-01", "2024-07-02")
+        days = await _fetch_daily(48.8566, 2.3522, "2024-07-01", "2024-07-02")
 
-    assert len(lines) == 2
-    assert "28.5°C" in lines[0]
-    assert "18.0°C" in lines[0]
-    assert "0.0mm" in lines[0]
-    # None values render as N/A
-    assert "N/A" in lines[1]
-    assert "5.2mm" in lines[1]
+    assert len(days) == 2
+    assert days[0].date == "2024-07-01"
+    assert days[0].temp_max_c == 28.5
+    assert days[0].temp_min_c == 18.0
+    assert days[0].precipitation_mm == 0.0
+    # None values are preserved
+    assert days[1].temp_max_c is None
+    assert days[1].precipitation_mm == 5.2
 
 
 async def test_weather_tool_returns_full_forecast_string() -> None:
     with (
         patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords,
-        patch("trip_planner.tools.weather._fetch_forecast", new_callable=AsyncMock) as mock_forecast,
+        patch("trip_planner.tools.weather._fetch_daily", new_callable=AsyncMock) as mock_daily,
     ):
         mock_coords.return_value = (48.8566, 2.3522)
-        mock_forecast.return_value = ["  2024-07-01: High 28.5°C, Low 18.0°C, Precipitation 0.0mm"]
+        mock_daily.return_value = [
+            WeatherDay(
+                date="2024-07-01", temp_max_c=28.5, temp_min_c=18.0, precipitation_mm=0.0
+            )
+        ]
 
         result = await weather_tool.ainvoke(
             {"city": "Paris", "start_date": "2024-07-01", "end_date": "2024-07-01"}

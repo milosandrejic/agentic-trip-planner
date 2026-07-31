@@ -1,4 +1,5 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+import time
 from typing import Any
 
 import httpx
@@ -6,6 +7,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from trip_planner.config import get_settings
+from trip_planner.services.types import PlaceResult, PlacesResult, ToolResult
 
 _TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _FIELD_MASK = (
@@ -13,6 +15,7 @@ _FIELD_MASK = (
     "places.userRatingCount,places.primaryType"
 )
 _MAX_RESULTS = 5
+_PROVIDER = "google-places"
 
 _settings = get_settings()
 
@@ -56,13 +59,39 @@ def _format_results(places: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-@tool(args_schema=_PlacesTextSearchInput)
-async def places_text_search_tool(query: str, max_results: int = _MAX_RESULTS) -> str:
+def _build_places_payload(query: str, places: list[dict[str, Any]]) -> PlacesResult:
+    """Map raw Google Places text-search matches into a typed PlacesResult payload."""
+    place_results: list[PlaceResult] = []
+
+    for place in places:
+        display_name: dict[str, Any] = place.get("displayName", {})
+        primary_type = place.get("primaryType")
+        categories = [primary_type] if primary_type else []
+
+        place_results.append(
+            PlaceResult(
+                name=display_name.get("text") or "Unknown place",
+                place_id=place.get("id") or None,
+                categories=categories,
+                address=place.get("formattedAddress") or None,
+                rating=place.get("rating"),
+                user_rating_count=place.get("userRatingCount"),
+            )
+        )
+
+    return PlacesResult(query=query, places=place_results)
+
+
+@tool(args_schema=_PlacesTextSearchInput, response_format="content_and_artifact")
+async def find_place_by_name_tool(
+    query: str, max_results: int = _MAX_RESULTS
+) -> tuple[str, ToolResult[PlacesResult]]:
     """Look up places by name or free-text query using Google Places Text Search.
 
     Returns matching places with their Google place_id, name, address, and rating. Use the
     returned place_id with the place_details tool to fetch full details for a chosen place.
     """
+    start = time.perf_counter()
     headers = {
         "X-Goog-Api-Key": _settings.google_places_api_key,
         "X-Goog-FieldMask": _FIELD_MASK,
@@ -77,10 +106,21 @@ async def places_text_search_tool(query: str, max_results: int = _MAX_RESULTS) -
 
         data: dict[str, Any] = response.json()
         places: list[dict[str, Any]] = data.get("places", [])
-        return _format_results(places)
-
     except httpx.HTTPStatusError as exc:
-        return f"Place lookup unavailable: Google Places returned {exc.response.status_code}"
-
+        content = f"Place lookup unavailable: Google Places returned {exc.response.status_code}"
+        result: ToolResult[PlacesResult] = ToolResult[PlacesResult].fail(
+            provider=_PROVIDER, message=content, retryable=True
+        )
     except (KeyError, TypeError) as exc:
-        return f"Unexpected response from Google Places: {exc}"
+        content = f"Unexpected response from Google Places: {exc}"
+        result = ToolResult[PlacesResult].fail(provider=_PROVIDER, message=content)
+    else:
+        payload = _build_places_payload(query, places)
+        content = _format_results(places)
+        if payload.places:
+            result = ToolResult.ok(provider=_PROVIDER, data=payload)
+        else:
+            result = ToolResult[PlacesResult].empty(provider=_PROVIDER)
+
+    result.latency_ms = round((time.perf_counter() - start) * 1000, 2)
+    return content, result

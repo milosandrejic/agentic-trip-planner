@@ -1,13 +1,16 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+import time
 from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from trip_planner.services.duffel_client import DuffelClient, DuffelError
+from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
 
 _MAX_OFFERS = 3
 _CABIN_CLASS = "economy"
+_PROVIDER = "duffel"
 
 _client = DuffelClient()
 
@@ -85,19 +88,59 @@ def _format_offers(offers: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-@tool(args_schema=_FlightSearchInput)
+def _build_flight_payload(
+    origin: str,
+    destination: str,
+    departure_date: str,
+    return_date: str | None,
+    passengers: int,
+    offers: list[dict[str, Any]],
+) -> FlightSearchResult:
+    """Map raw Duffel offers into a typed FlightSearchResult payload for graph state."""
+    flight_offers: list[FlightOffer] = []
+
+    for offer in offers[:_MAX_OFFERS]:
+        slices: list[dict[str, Any]] = offer.get("slices", [])
+        first_slice = slices[0] if slices else {}
+        segments: list[dict[str, Any]] = first_slice.get("segments", [])
+        stops = max(0, len(segments) - 1)
+
+        flight_offers.append(
+            FlightOffer(
+                offer_id=str(offer.get("id", "")),
+                airline=offer.get("owner", {}).get("name", "Unknown airline"),
+                stops=stops,
+                total_amount=str(offer.get("total_amount", "")),
+                currency=offer.get("total_currency", ""),
+                outbound_date=departure_date,
+                return_date=return_date,
+            )
+        )
+
+    return FlightSearchResult(
+        origin=origin,
+        destination=destination,
+        departure_date=departure_date,
+        passengers=passengers,
+        return_date=return_date,
+        offers=flight_offers,
+    )
+
+
+@tool(args_schema=_FlightSearchInput, response_format="content_and_artifact")
 async def flight_search_tool(
     origin: str,
     destination: str,
     departure_date: str,
     return_date: str | None = None,
     passengers: int = 1,
-) -> str:
+) -> tuple[str, ToolResult[FlightSearchResult]]:
     """Search for available flights between two airports on given dates.
 
     Returns a formatted summary of the top available offers including airline,
     price, number of stops, and flight duration. Use IATA airport codes.
     """
+    start = time.perf_counter()
     offer_request_body = _build_offer_request(
         origin, destination, departure_date, return_date, passengers
     )
@@ -111,11 +154,23 @@ async def flight_search_tool(
             params={"offer_request_id": offer_request_id, "limit": str(_MAX_OFFERS)},
         )
         offers: list[dict[str, Any]] = offers_response.get("data", [])
-
-        return _format_offers(offers)
-
     except DuffelError as exc:
-        return f"Flight search unavailable: {exc.detail}"
-
+        content = f"Flight search unavailable: {exc.detail}"
+        result: ToolResult[FlightSearchResult] = ToolResult[FlightSearchResult].fail(
+            provider=_PROVIDER, message=content, retryable=True
+        )
     except (KeyError, TypeError) as exc:
-        return f"Unexpected response from Duffel API: {exc}"
+        content = f"Unexpected response from Duffel API: {exc}"
+        result = ToolResult[FlightSearchResult].fail(provider=_PROVIDER, message=content)
+    else:
+        payload = _build_flight_payload(
+            origin, destination, departure_date, return_date, passengers, offers
+        )
+        content = _format_offers(offers)
+        if payload.offers:
+            result = ToolResult.ok(provider=_PROVIDER, data=payload)
+        else:
+            result = ToolResult[FlightSearchResult].empty(provider=_PROVIDER)
+
+    result.latency_ms = round((time.perf_counter() - start) * 1000, 2)
+    return content, result
