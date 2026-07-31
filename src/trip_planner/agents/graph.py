@@ -1,4 +1,5 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false
+import asyncio
 import uuid
 from datetime import date
 from typing import Literal, cast
@@ -87,6 +88,14 @@ _settings = get_settings()
 _REASONING_TEMPERATURE = 0.7
 _DETERMINISTIC_TEMPERATURE = 0.0
 
+# Safety limits guard against runaway agent loops and hung provider calls.
+# _MAX_TOOL_CALLS caps how many tool invocations a single run may make before the reasoner is
+# forced to answer from what it already gathered; it also seeds a per-run cost-tracking counter.
+# _RECURSION_LIMIT is LangGraph's superstep backstop, and _RUN_TIMEOUT_SECONDS bounds wall time.
+_MAX_TOOL_CALLS = 8
+_RECURSION_LIMIT = 25
+_RUN_TIMEOUT_SECONDS = 120.0
+
 
 def _build_llm(temperature: float) -> ChatOpenAI:
     """Create a ChatOpenAI client for the configured model at the given temperature."""
@@ -151,6 +160,7 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
     return TripPlannerState(
         messages=[],
         trip_request=state["trip_request"],
+        tool_call_count=0,
         tool_results=[],
         current_itinerary=None,
         pending_clarification=clarification,
@@ -158,18 +168,28 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
 
 
 async def reason_node(state: TripPlannerState) -> TripPlannerState:
-    """Reason about the current state: call tools or produce a final answer."""
+    """Reason about the current state: call tools or produce a final answer.
+
+    Once the run has spent its tool-call budget the reasoner is invoked without tools bound,
+    forcing it to answer from the evidence already gathered instead of looping indefinitely.
+    """
     today = date.today().isoformat()
     system_message = SystemMessage(content=_SYSTEM_PROMPT_TEMPLATE.format(today=today))
     messages_with_system = [system_message] + list(state["messages"])
 
-    response = await _llm_with_tools.ainvoke(messages_with_system)
+    calls_so_far = state.get("tool_call_count", 0)
+    budget_exhausted = calls_so_far >= _MAX_TOOL_CALLS
+    reasoner = _reasoning_llm if budget_exhausted else _llm_with_tools
+
+    response = await reasoner.ainvoke(messages_with_system)
+
+    new_tool_calls = len(response.tool_calls)
 
     return TripPlannerState(
         messages=[response],
         trip_request=state["trip_request"],
+        tool_call_count=calls_so_far + new_tool_calls,
     )
-
 
 def _as_structured_tool_message(message: ToolMessage) -> ToolMessage:
     """Replace a tool message's human-readable text with its structured ToolResult payload.
@@ -267,7 +287,8 @@ async def run_planner(state: TripPlannerState, thread_id: str | None = None) -> 
     """Invoke the stateful trip planner graph.
 
     Every run is checkpointed. `thread_id` resumes an existing conversation; when omitted a
-    fresh id is generated for a new one.
+    fresh id is generated for a new one. The run is bounded by a recursion limit and an overall
+    wall-clock timeout so a stuck agent or hung provider call cannot block a request forever.
     """
     compiled = _compiled_graph
 
@@ -275,7 +296,20 @@ async def run_planner(state: TripPlannerState, thread_id: str | None = None) -> 
         raise RuntimeError("Graph has not been initialized — call init_graph() at startup.")
 
     resolved_thread_id = thread_id or str(uuid.uuid4())
-    config = RunnableConfig(configurable={"thread_id": resolved_thread_id})
-    result = await compiled.ainvoke(state, config)
+    config = RunnableConfig(
+        configurable={"thread_id": resolved_thread_id},
+        recursion_limit=_RECURSION_LIMIT,
+    )
+
+    try:
+        result = await asyncio.wait_for(
+            compiled.ainvoke(state, config),
+            timeout=_RUN_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"Trip planner run exceeded the {_RUN_TIMEOUT_SECONDS:.0f}s time limit."
+        ) from exc
+
     return cast(TripPlannerState, result)
 

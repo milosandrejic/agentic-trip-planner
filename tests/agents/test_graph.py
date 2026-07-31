@@ -1,4 +1,5 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -78,6 +79,51 @@ async def test_agent_node_returns_updated_messages() -> None:
 
     assert ai_response in result["messages"]
     assert result["trip_request"] == "Paris 7 days"
+
+
+async def test_reason_node_counts_tool_calls_against_the_budget() -> None:
+    ai_response = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "web_search", "args": {"query": "Paris"}, "id": "call_1"},
+            {"name": "weather", "args": {"city": "Paris"}, "id": "call_2"},
+        ],
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days")],
+        trip_request="Paris 7 days",
+        tool_call_count=3,
+    )
+
+    with patch("trip_planner.agents.graph._llm_with_tools") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=ai_response)
+        result = await reason_node(state)
+
+    assert result.get("tool_call_count") == 5
+
+
+async def test_reason_node_drops_tools_once_budget_is_exhausted() -> None:
+    from trip_planner.agents.graph import _MAX_TOOL_CALLS
+
+    final_answer = AIMessage(content="Here is your itinerary.")
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days")],
+        trip_request="Paris 7 days",
+        tool_call_count=_MAX_TOOL_CALLS,
+    )
+
+    with (
+        patch("trip_planner.agents.graph._reasoning_llm") as mock_reasoning,
+        patch("trip_planner.agents.graph._llm_with_tools") as mock_with_tools,
+    ):
+        mock_reasoning.ainvoke = AsyncMock(return_value=final_answer)
+        mock_with_tools.ainvoke = AsyncMock()
+        result = await reason_node(state)
+
+    mock_reasoning.ainvoke.assert_awaited_once()
+    mock_with_tools.ainvoke.assert_not_awaited()
+    assert _route_after_reason(result) == "format"
+    assert result.get("tool_call_count") == _MAX_TOOL_CALLS
 
 
 # --- format_node ---
@@ -239,6 +285,7 @@ async def test_triage_node_resets_transient_state_for_resumed_threads() -> None:
 
     assert result.get("current_itinerary") is None
     assert result.get("tool_results") == []
+    assert result.get("tool_call_count") == 0
 
 
 # --- run_planner graph selection ---
@@ -275,6 +322,38 @@ async def test_run_planner_raises_when_not_initialized() -> None:
     with (
         patch("trip_planner.agents.graph._compiled_graph", None),
         pytest.raises(RuntimeError, match="init_graph"),
+    ):
+        await run_planner(state)
+
+
+async def test_run_planner_applies_recursion_limit() -> None:
+    from trip_planner.agents.graph import _RECURSION_LIMIT
+
+    state = _make_state([HumanMessage(content="Paris 7 days")])
+    compiled = MagicMock()
+    compiled.ainvoke = AsyncMock(return_value=state)
+
+    with patch("trip_planner.agents.graph._compiled_graph", compiled):
+        await run_planner(state, thread_id="abc-123")
+
+    config = compiled.ainvoke.call_args.args[1]
+    assert config["recursion_limit"] == _RECURSION_LIMIT
+
+
+async def test_run_planner_raises_timeout_when_run_exceeds_limit() -> None:
+    state = _make_state([HumanMessage(content="Paris 7 days")])
+    compiled = MagicMock()
+
+    async def _never_finish(*_args: object, **_kwargs: object) -> TripPlannerState:
+        await asyncio.Event().wait()
+        return state
+
+    compiled.ainvoke = _never_finish
+
+    with (
+        patch("trip_planner.agents.graph._compiled_graph", compiled),
+        patch("trip_planner.agents.graph._RUN_TIMEOUT_SECONDS", 0.01),
+        pytest.raises(TimeoutError, match="time limit"),
     ):
         await run_planner(state)
 

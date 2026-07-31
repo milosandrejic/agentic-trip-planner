@@ -14,6 +14,7 @@ from trip_planner.services.types import ToolResult
 class TripPlannerState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     trip_request: str
+    tool_call_count: NotRequired[int]
     tool_results: NotRequired[list[ToolResult[BaseModel]]]
     current_itinerary: NotRequired[Itinerary | None]
     pending_clarification: NotRequired[ClarificationRequest | None]
