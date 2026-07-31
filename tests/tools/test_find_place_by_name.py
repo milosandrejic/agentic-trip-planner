@@ -1,8 +1,10 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
+from trip_planner.services.types import ToolStatus
 from trip_planner.tools.find_place_by_name import _format_results, find_place_by_name_tool
 
 _TEXT_SEARCH_RESPONSE = {
@@ -108,3 +110,57 @@ async def test_find_place_by_name_tool_returns_error_string_on_http_error() -> N
 
     assert "unavailable" in result
     assert "429" in result
+
+
+# --- find_place_by_name_tool ToolResult envelope ---
+
+
+def _tool_call(args: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "tool_call", "name": "find_place_by_name_tool", "args": args, "id": "call_1"}
+
+
+async def test_find_place_by_name_tool_success_envelope_carries_typed_places() -> None:
+    mock_cls = _patch_client(_make_mock_response(_TEXT_SEARCH_RESPONSE))
+
+    with patch("trip_planner.tools.find_place_by_name.httpx.AsyncClient", mock_cls):
+        message = await find_place_by_name_tool.ainvoke(_tool_call({"query": "Eiffel Tower"}))
+
+    result = message.artifact
+    assert result.status == ToolStatus.SUCCESS
+    assert result.provider == "google-places"
+    assert result.error is None
+    assert result.latency_ms is not None
+    assert result.data is not None
+    assert len(result.data.places) == 2
+
+
+async def test_find_place_by_name_tool_empty_envelope_when_no_places() -> None:
+    mock_cls = _patch_client(_make_mock_response({"places": []}))
+
+    with patch("trip_planner.tools.find_place_by_name.httpx.AsyncClient", mock_cls):
+        message = await find_place_by_name_tool.ainvoke(_tool_call({"query": "Nonexistent xyz"}))
+
+    result = message.artifact
+    assert result.status == ToolStatus.EMPTY
+    assert result.provider == "google-places"
+    assert result.data is None
+    assert result.error is None
+    assert result.latency_ms is not None
+
+
+async def test_find_place_by_name_tool_error_envelope_is_retryable_on_http_error() -> None:
+    mock_response = _make_mock_response({})
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "503", request=MagicMock(), response=MagicMock(status_code=503)
+    )
+    mock_cls = _patch_client(mock_response)
+
+    with patch("trip_planner.tools.find_place_by_name.httpx.AsyncClient", mock_cls):
+        message = await find_place_by_name_tool.ainvoke(_tool_call({"query": "Eiffel Tower"}))
+
+    result = message.artifact
+    assert result.status == ToolStatus.ERROR
+    assert result.provider == "google-places"
+    assert result.data is None
+    assert result.error is not None
+    assert result.error.retryable is True

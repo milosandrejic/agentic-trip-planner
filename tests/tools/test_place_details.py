@@ -1,8 +1,10 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
+from trip_planner.services.types import ToolStatus
 from trip_planner.tools.place_details import _format_details, place_details_tool
 
 _DETAILS_RESPONSE = {
@@ -102,3 +104,43 @@ async def test_place_details_tool_returns_error_string_on_http_error() -> None:
 
     assert "unavailable" in result
     assert "404" in result
+
+
+# --- place_details_tool ToolResult envelope ---
+
+
+def _tool_call(args: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "tool_call", "name": "place_details_tool", "args": args, "id": "call_1"}
+
+
+async def test_place_details_tool_success_envelope_carries_typed_place() -> None:
+    mock_cls = _patch_client(_make_mock_response(_DETAILS_RESPONSE))
+
+    with patch("trip_planner.tools.place_details.httpx.AsyncClient", mock_cls):
+        message = await place_details_tool.ainvoke(_tool_call({"place_id": "ChIJ123"}))
+
+    result = message.artifact
+    assert result.status == ToolStatus.SUCCESS
+    assert result.provider == "google-places"
+    assert result.error is None
+    assert result.latency_ms is not None
+    assert result.data is not None
+    assert result.data.name == "Louvre Museum"
+
+
+async def test_place_details_tool_error_envelope_is_retryable_on_http_error() -> None:
+    mock_response = _make_mock_response({})
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "503", request=MagicMock(), response=MagicMock(status_code=503)
+    )
+    mock_cls = _patch_client(mock_response)
+
+    with patch("trip_planner.tools.place_details.httpx.AsyncClient", mock_cls):
+        message = await place_details_tool.ainvoke(_tool_call({"place_id": "unknown"}))
+
+    result = message.artifact
+    assert result.status == ToolStatus.ERROR
+    assert result.provider == "google-places"
+    assert result.data is None
+    assert result.error is not None
+    assert result.error.retryable is True

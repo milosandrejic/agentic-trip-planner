@@ -1,10 +1,11 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from trip_planner.services.types import WeatherDay
+from trip_planner.services.types import ToolStatus, WeatherDay
 from trip_planner.tools.weather import _fetch_coordinates, _fetch_daily, weather_tool
 
 _GEOCODING_RESPONSE = {
@@ -126,3 +127,78 @@ async def test_weather_tool_returns_error_string_for_unknown_city() -> None:
 
     assert "unavailable" in result
     assert "Atlantis" in result
+
+
+# --- weather_tool ToolResult envelope ---
+
+_SUCCESS_ARGS = {"city": "Paris", "start_date": "2024-07-01", "end_date": "2024-07-02"}
+
+
+def _tool_call(args: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "tool_call", "name": "weather_tool", "args": args, "id": "call_1"}
+
+
+async def test_weather_tool_success_envelope_carries_typed_days() -> None:
+    with (
+        patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords,
+        patch("trip_planner.tools.weather._fetch_daily", new_callable=AsyncMock) as mock_daily,
+    ):
+        mock_coords.return_value = (48.8566, 2.3522)
+        mock_daily.return_value = [
+            WeatherDay(date="2024-07-01", temp_max_c=28.5, temp_min_c=18.0, precipitation_mm=0.0)
+        ]
+        message = await weather_tool.ainvoke(_tool_call(_SUCCESS_ARGS))
+
+    result = message.artifact
+    assert result.status == ToolStatus.SUCCESS
+    assert result.provider == "open-meteo"
+    assert result.error is None
+    assert result.latency_ms is not None
+    assert result.data is not None
+    assert result.data.location == "Paris"
+    assert len(result.data.days) == 1
+
+
+async def test_weather_tool_empty_envelope_when_no_days() -> None:
+    with (
+        patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords,
+        patch("trip_planner.tools.weather._fetch_daily", new_callable=AsyncMock) as mock_daily,
+    ):
+        mock_coords.return_value = (48.8566, 2.3522)
+        mock_daily.return_value = []
+        message = await weather_tool.ainvoke(_tool_call(_SUCCESS_ARGS))
+
+    result = message.artifact
+    assert result.status == ToolStatus.EMPTY
+    assert result.provider == "open-meteo"
+    assert result.data is None
+    assert result.error is None
+    assert result.latency_ms is not None
+
+
+async def test_weather_tool_error_envelope_is_retryable_on_http_error() -> None:
+    with patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords:
+        mock_coords.side_effect = httpx.HTTPStatusError(
+            "503", request=MagicMock(), response=MagicMock(status_code=503)
+        )
+        message = await weather_tool.ainvoke(_tool_call(_SUCCESS_ARGS))
+
+    result = message.artifact
+    assert result.status == ToolStatus.ERROR
+    assert result.provider == "open-meteo"
+    assert result.data is None
+    assert result.error is not None
+    assert result.error.retryable is True
+
+
+async def test_weather_tool_error_envelope_not_retryable_for_unknown_city() -> None:
+    with patch("trip_planner.tools.weather._fetch_coordinates", new_callable=AsyncMock) as mock_coords:
+        mock_coords.side_effect = ValueError("City not found: 'Atlantis'")
+        message = await weather_tool.ainvoke(
+            _tool_call({"city": "Atlantis", "start_date": "2024-07-01", "end_date": "2024-07-02"})
+        )
+
+    result = message.artifact
+    assert result.status == ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.retryable is False

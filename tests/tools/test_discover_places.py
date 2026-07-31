@@ -1,9 +1,11 @@
 # pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from trip_planner.services.types import ToolStatus
 from trip_planner.tools.discover_places import (
     _format_places,
     _geocode,
@@ -179,3 +181,86 @@ async def test_discover_places_tool_returns_error_string_on_http_error() -> None
 
     assert "unavailable" in result
     assert "429" in result
+
+
+# --- discover_places_tool ToolResult envelope ---
+
+
+def _tool_call(args: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "tool_call", "name": "discover_places_tool", "args": args, "id": "call_1"}
+
+
+async def test_discover_places_tool_success_envelope_carries_typed_places() -> None:
+    with (
+        patch("trip_planner.tools.discover_places._geocode", new_callable=AsyncMock) as mock_geo,
+        patch("trip_planner.tools.discover_places._search_places", new_callable=AsyncMock) as mock_search,
+    ):
+        mock_geo.return_value = (48.8566, 2.3522)
+        mock_search.return_value = [
+            _PLACES_RESPONSE["features"][0]["properties"],
+            _PLACES_RESPONSE["features"][1]["properties"],
+        ]
+        message = await discover_places_tool.ainvoke(
+            _tool_call({"city": "Paris", "categories": "entertainment.museum"})
+        )
+
+    result = message.artifact
+    assert result.status == ToolStatus.SUCCESS
+    assert result.provider == "geoapify"
+    assert result.error is None
+    assert result.latency_ms is not None
+    assert result.data is not None
+    assert len(result.data.places) == 2
+
+
+async def test_discover_places_tool_empty_envelope_when_no_places() -> None:
+    with (
+        patch("trip_planner.tools.discover_places._geocode", new_callable=AsyncMock) as mock_geo,
+        patch("trip_planner.tools.discover_places._search_places", new_callable=AsyncMock) as mock_search,
+    ):
+        mock_geo.return_value = (48.8566, 2.3522)
+        mock_search.return_value = []
+        message = await discover_places_tool.ainvoke(
+            _tool_call({"city": "Paris", "categories": "tourism.sights"})
+        )
+
+    result = message.artifact
+    assert result.status == ToolStatus.EMPTY
+    assert result.provider == "geoapify"
+    assert result.data is None
+    assert result.error is None
+    assert result.latency_ms is not None
+
+
+async def test_discover_places_tool_error_envelope_is_retryable_on_http_error() -> None:
+    with (
+        patch("trip_planner.tools.discover_places._geocode", new_callable=AsyncMock) as mock_geo,
+        patch("trip_planner.tools.discover_places._search_places", new_callable=AsyncMock) as mock_search,
+    ):
+        mock_geo.return_value = (48.8566, 2.3522)
+        mock_search.side_effect = httpx.HTTPStatusError(
+            "503", request=MagicMock(), response=MagicMock(status_code=503)
+        )
+        message = await discover_places_tool.ainvoke(
+            _tool_call({"city": "Paris", "categories": "tourism.sights"})
+        )
+
+    result = message.artifact
+    assert result.status == ToolStatus.ERROR
+    assert result.provider == "geoapify"
+    assert result.data is None
+    assert result.error is not None
+    assert result.error.retryable is True
+
+
+async def test_discover_places_tool_error_envelope_not_retryable_for_unknown_city() -> None:
+    with patch("trip_planner.tools.discover_places._geocode", new_callable=AsyncMock) as mock_geo:
+        mock_geo.side_effect = ValueError("City not found: 'Atlantis'")
+        message = await discover_places_tool.ainvoke(
+            _tool_call({"city": "Atlantis", "categories": "tourism.sights"})
+        )
+
+    result = message.artifact
+    assert result.status == ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.retryable is False
