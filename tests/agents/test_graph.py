@@ -237,9 +237,11 @@ async def test_triage_node_sets_clarification_when_llm_decides_to_clarify() -> N
         missing_fields=["destination", "duration"],
     )
 
-    from trip_planner.agents.graph import _TriageDecision
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
 
-    decision = _TriageDecision(should_clarify=True, clarification=clarification)
+    decision = _TriageDecision(
+        intent=_TriageIntent.NEW_TRIP, should_clarify=True, clarification=clarification
+    )
     state = TripPlannerState(
         messages=[HumanMessage(content="plan me a trip")],
         trip_request="plan me a trip",
@@ -254,9 +256,11 @@ async def test_triage_node_sets_clarification_when_llm_decides_to_clarify() -> N
 
 
 async def test_triage_node_sets_clarification_to_none_when_request_is_complete() -> None:
-    from trip_planner.agents.graph import _TriageDecision
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
 
-    decision = _TriageDecision(should_clarify=False, clarification=None)
+    decision = _TriageDecision(
+        intent=_TriageIntent.NEW_TRIP, should_clarify=False, clarification=None
+    )
     state = TripPlannerState(
         messages=[HumanMessage(content="Paris 7 days in July, I like history")],
         trip_request="Paris 7 days in July, I like history",
@@ -271,9 +275,11 @@ async def test_triage_node_sets_clarification_to_none_when_request_is_complete()
 
 
 async def test_triage_node_resets_transient_state_for_resumed_threads() -> None:
-    from trip_planner.agents.graph import _TriageDecision
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
 
-    decision = _TriageDecision(should_clarify=False, clarification=None)
+    decision = _TriageDecision(
+        intent=_TriageIntent.NEW_TRIP, should_clarify=False, clarification=None
+    )
     state = TripPlannerState(
         messages=[HumanMessage(content="Paris 7 days in July")],
         trip_request="Paris 7 days in July",
@@ -286,6 +292,82 @@ async def test_triage_node_resets_transient_state_for_resumed_threads() -> None:
     assert result.get("current_itinerary") is None
     assert result.get("tool_results") == []
     assert result.get("tool_call_count") == 0
+
+
+async def test_triage_node_never_reclarifies_when_itinerary_already_exists() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    clarification = ClarificationRequest(
+        message="Where would you like to go?",
+        missing_fields=["destination"],
+    )
+    # The model still asks to clarify, but an itinerary already exists on the resumed thread.
+    decision = _TriageDecision(
+        intent=_TriageIntent.NEW_TRIP, should_clarify=True, clarification=clarification
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="actually plan me something else")],
+        trip_request="actually plan me something else",
+        current_itinerary=_make_itinerary(),
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("pending_clarification") is None
+
+
+async def test_triage_node_lets_modifications_proceed_without_clarifying() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    decision = _TriageDecision(
+        intent=_TriageIntent.ITINERARY_MODIFICATION, should_clarify=False, clarification=None
+    )
+    state = TripPlannerState(
+        messages=[
+            HumanMessage(content="Paris 7 days"),
+            AIMessage(content="Here is your Paris itinerary..."),
+            HumanMessage(content="swap day 2 for a food tour"),
+        ],
+        trip_request="swap day 2 for a food tour",
+        current_itinerary=_make_itinerary(),
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("pending_clarification") is None
+    assert _route_after_triage(result) == "reason"
+
+
+async def test_triage_node_feeds_conversation_history_to_the_llm() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    decision = _TriageDecision(
+        intent=_TriageIntent.TRIP_QUESTION, should_clarify=False, clarification=None
+    )
+    history = [
+        HumanMessage(content="Paris 7 days"),
+        AIMessage(content="Here is your Paris itinerary..."),
+        HumanMessage(content="what's the weather like there?"),
+    ]
+    state = TripPlannerState(
+        messages=history,  # type: ignore[arg-type]
+        trip_request="what's the weather like there?",
+        current_itinerary=_make_itinerary(),
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        await triage_node(state)
+
+    await_args = mock_triage.ainvoke.await_args
+    assert await_args is not None
+    passed_messages = await_args.args[0]
+    # System triage prompt is prepended, followed by the full conversation history.
+    assert passed_messages[1:] == history
 
 
 # --- run_planner graph selection ---

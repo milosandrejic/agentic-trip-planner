@@ -2,9 +2,10 @@
 import asyncio
 import uuid
 from datetime import date
+from enum import Enum
 from typing import Literal, cast
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -38,16 +39,25 @@ _TOOLS = [
 
 _TRIAGE_PROMPT_TEMPLATE = (
     "Today is {today}. "
-    "You are assessing whether a trip planning request has enough information to proceed. "
-    "A request is ready to plan if it includes at minimum: a destination and an approximate duration or travel dates. "
-    "Travel dates must be in the future relative to today ({today}). "
-    "If the user mentions only a month with no year (e.g. 'July'), infer the nearest future occurrence. "
-    "If dates are in the past or too vague to resolve, treat them as missing. "
-    "If the request is missing critical information, set should_clarify=true and provide a friendly, "
-    "conversational message asking for what is needed. "
-    "List the missing fields by their machine-readable names "
-    "(e.g. 'destination', 'travel_dates', 'duration', 'budget', 'traveler_count'). "
-    "If the request has enough to plan, set should_clarify=false and leave clarification as null."
+    "You are the triage step of a trip-planning assistant. Read the ENTIRE conversation so far, "
+    "then classify the user's latest message into exactly one intent:\n"
+    "- 'new_trip': a request to plan a brand-new trip.\n"
+    "- 'itinerary_modification': a change to an itinerary already being planned (add, remove, or "
+    "swap days, activities, budget, or dates).\n"
+    "- 'clarification_answer': the user is answering a question you asked in an earlier turn.\n"
+    "- 'trip_question': a question about the trip or destination that does not change the plan.\n"
+    "{itinerary_state}\n"
+    "Only set should_clarify=true for a 'new_trip' that is missing critical information — at minimum "
+    "a destination and an approximate duration or travel dates. "
+    "Never ask for clarification for itinerary_modification, clarification_answer, or trip_question; "
+    "for those, set should_clarify=false and act on what the user said. "
+    "Travel dates must be in the future relative to today ({today}); if the user mentions only a "
+    "month with no year, infer the nearest future occurrence, and treat past or unresolvable dates "
+    "as missing. "
+    "When you clarify, provide a friendly, conversational message and list the missing fields by "
+    "their machine-readable names (e.g. 'destination', 'travel_dates', 'duration', 'budget', "
+    "'traveler_count'). "
+    "Otherwise set should_clarify=false and leave clarification as null."
 )
 
 _SYSTEM_PROMPT_TEMPLATE = (
@@ -116,9 +126,19 @@ _llm_with_tools = _reasoning_llm.bind_tools(_TOOLS)
 _llm_structured = _format_llm.with_structured_output(Itinerary)
 
 
+class _TriageIntent(str, Enum):
+    NEW_TRIP = "new_trip"
+    ITINERARY_MODIFICATION = "itinerary_modification"
+    CLARIFICATION_ANSWER = "clarification_answer"
+    TRIP_QUESTION = "trip_question"
+
+
 class _TriageDecision(BaseModel):
+    intent: _TriageIntent = Field(
+        description="The classified intent of the user's latest message given the conversation."
+    )
     should_clarify: bool = Field(
-        description="True if the trip request is missing critical information to plan a trip."
+        description="True only for a new_trip missing critical information to plan a trip."
     )
     clarification: ClarificationRequest | None = Field(
         default=None,
@@ -146,14 +166,29 @@ def _route_after_reason(state: TripPlannerState) -> Literal["tools", "format"]:
 
 
 async def triage_node(state: TripPlannerState) -> TripPlannerState:
-    """Assess completeness of the trip request and decide whether to plan or ask for clarification."""
+    """Classify the latest message against the conversation and decide whether to clarify.
+
+    Triage reads the full history so follow-ups (modifications, answers, questions) flow straight
+    to reasoning. Once an itinerary exists the user is iterating, so clarification is never asked
+    again regardless of the model's suggestion.
+    """
     today = date.today().isoformat()
-    triage_message = SystemMessage(content=_TRIAGE_PROMPT_TEMPLATE.format(today=today))
-    user_request = HumanMessage(content=state["trip_request"])
+    has_itinerary = state.get("current_itinerary") is not None
+    itinerary_state = (
+        "An itinerary already exists for this conversation; never ask for clarification — apply the "
+        "requested change or answer directly."
+        if has_itinerary
+        else "No itinerary exists yet for this conversation."
+    )
+    triage_message = SystemMessage(
+        content=_TRIAGE_PROMPT_TEMPLATE.format(today=today, itinerary_state=itinerary_state)
+    )
+    conversation = list(state["messages"])
 
-    decision = cast(_TriageDecision, await _llm_triage.ainvoke([triage_message, user_request]))
+    decision = cast(_TriageDecision, await _llm_triage.ainvoke([triage_message] + conversation))
 
-    clarification = decision.clarification if decision.should_clarify else None
+    should_clarify = decision.should_clarify and not has_itinerary
+    clarification = decision.clarification if should_clarify else None
 
     # Reset transient outputs so a resumed thread never reads a previous turn's itinerary
     # or tool results (this graph is checkpointed and re-entered on follow-up messages).

@@ -167,7 +167,7 @@
 
 ## Wave 4 — Follow-up Triage + Memory Ownership + Thread Lifecycle
 
-- [ ] Follow-up aware triage — use conversation history, classify intent: New Trip | Itinerary Modification | Clarification Answer | Trip Question; do **not** re-clarify when an itinerary already exists
+- [x] Follow-up aware triage — use conversation history, classify intent: New Trip | Itinerary Modification | Clarification Answer | Trip Question; do **not** re-clarify when an itinerary already exists
 - [ ] Define memory ownership: LangGraph checkpoint = execution state; application DB (threads/messages) = user-visible conversation
 - [ ] Thread lifecycle `status` column (Pending / Running / Ready / Failed / Deleted) + Alembic migration + transitions
 - [ ] Tests: follow-up modification (no re-clarify), clarification answer flow, intent classification, status transitions
