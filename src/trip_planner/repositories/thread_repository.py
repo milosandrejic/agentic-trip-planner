@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from trip_planner.models.thread import Thread
+from trip_planner.models.thread import Thread, ThreadStatus
 
 
 async def create_thread(
@@ -55,6 +55,7 @@ async def list_by_user(db: AsyncSession, user_id: uuid.UUID) -> list[Thread]:
 async def soft_delete(db: AsyncSession, thread: Thread) -> Thread:
     """Mark a thread as deleted and return the updated instance."""
     thread.deleted_at = datetime.now(timezone.utc)
+    thread.status = ThreadStatus.DELETED
 
     await db.flush()
     await db.refresh(thread)

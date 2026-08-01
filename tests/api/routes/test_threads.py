@@ -3,9 +3,11 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from httpx import AsyncClient
 
 from trip_planner.agents.graph import PlannerOutcome
+from trip_planner.models.thread import ThreadStatus
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
 from trip_planner.services.auth_service import create_access_token
@@ -53,6 +55,7 @@ def make_mock_thread(user_id: uuid.UUID) -> MagicMock:
     thread.user_id = user_id
     thread.title = "Trip to Paris"
     thread.slug = "trip-to-paris-abc12345"
+    thread.status = ThreadStatus.READY
     thread.created_at = datetime.now(timezone.utc)
     thread.updated_at = datetime.now(timezone.utc)
     return thread
@@ -225,6 +228,56 @@ async def test_create_thread_returns_500_when_graph_returns_no_itinerary(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "Graph did not produce a structured itinerary or clarification"
+
+
+async def test_create_thread_marks_thread_ready_on_success(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    result = make_plan_result()
+    thread = make_mock_thread(user.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_create_thread.return_value = thread
+        mock_planner.return_value = result
+
+        await db_client.post(
+            "/threads",
+            json={"query": "Plan a 7-day Paris trip for 2 people"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert thread.status == ThreadStatus.READY
+
+
+async def test_create_thread_marks_thread_failed_when_planner_raises(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_create_thread.return_value = thread
+        mock_planner.side_effect = TimeoutError("planner exceeded the time limit")
+
+        with pytest.raises(TimeoutError):
+            await db_client.post(
+                "/threads",
+                json={"query": "Plan a 7-day Paris trip for 2 people"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert thread.status == ThreadStatus.FAILED
 
 
 async def test_create_thread_returns_401_without_token(db_client: AsyncClient) -> None:
@@ -417,6 +470,31 @@ async def test_send_message_returns_500_when_graph_returns_no_itinerary(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "Graph did not produce a structured itinerary or clarification"
+
+
+async def test_send_message_marks_thread_failed_when_planner_raises(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_get_thread.return_value = thread
+        mock_planner.side_effect = TimeoutError("planner exceeded the time limit")
+
+        with pytest.raises(TimeoutError):
+            await db_client.post(
+                f"/threads/{thread.id}/messages",
+                json={"query": "Add a day trip to Mount Fuji"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert thread.status == ThreadStatus.FAILED
 
 
 # --- GET /threads ---

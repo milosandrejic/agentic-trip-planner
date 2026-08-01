@@ -1,10 +1,9 @@
+# pyright: reportUnknownLambdaType=false
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from trip_planner.models.thread import Thread
+from trip_planner.models.thread import Thread, ThreadStatus
 from trip_planner.repositories import thread_repository
 
 
@@ -164,6 +163,15 @@ async def test_soft_delete_sets_deleted_at_on_thread() -> None:
 
     assert thread.deleted_at is not None
     assert thread.deleted_at >= before
+
+
+async def test_soft_delete_marks_thread_status_deleted() -> None:
+    db = make_db()
+    thread = make_mock_thread()
+
+    await thread_repository.soft_delete(db, thread)
+
+    assert thread.status == ThreadStatus.DELETED
 
 
 async def test_soft_delete_calls_flush_and_refresh() -> None:

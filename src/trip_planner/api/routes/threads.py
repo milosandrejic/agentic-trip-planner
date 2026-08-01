@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from trip_planner.agents.graph import plan_turn
 from trip_planner.api.dependencies import CurrentUser, DbSession
 from trip_planner.models.message import Message
-from trip_planner.models.thread import Thread
+from trip_planner.models.thread import Thread, ThreadStatus
 from trip_planner.repositories import message_repository, thread_repository
 from trip_planner.schemas.threads import (
     CreateThreadRequest,
@@ -45,6 +45,7 @@ def _to_thread_summary(thread: Thread) -> ThreadSummary:
         id=thread.id,
         title=thread.title,
         slug=thread.slug,
+        status=thread.status,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
     )
@@ -77,9 +78,16 @@ async def create_thread(
     await message_repository.create_message(
         db, thread_id=thread.id, role="human", content=body.query
     )
+    thread.status = ThreadStatus.RUNNING
     await db.commit()
 
-    outcome = await plan_turn(body.query, thread_id=str(thread.id))
+    try:
+        outcome = await plan_turn(body.query, thread_id=str(thread.id))
+    except Exception:
+        # Any planner failure leaves the thread FAILED so clients can surface or retry it.
+        thread.status = ThreadStatus.FAILED
+        await db.commit()
+        raise
 
     clarification = outcome.clarification
     itinerary = outcome.itinerary
@@ -88,6 +96,7 @@ async def create_thread(
         await message_repository.create_message(
             db, thread_id=thread.id, role="assistant", content=clarification.message
         )
+        thread.status = ThreadStatus.READY
         await db.commit()
         return CreateThreadResponse(
             thread=_to_thread_summary(thread),
@@ -95,6 +104,8 @@ async def create_thread(
         )
 
     if itinerary is None:
+        thread.status = ThreadStatus.FAILED
+        await db.commit()
         raise _graph_error
 
     await message_repository.create_message(
@@ -104,6 +115,7 @@ async def create_thread(
         content=itinerary.summary,
         itinerary=itinerary.model_dump(),
     )
+    thread.status = ThreadStatus.READY
 
     await db.commit()
 
@@ -137,9 +149,16 @@ async def send_message(
     await message_repository.create_message(
         db, thread_id=thread.id, role="human", content=body.query
     )
+    thread.status = ThreadStatus.RUNNING
     await db.commit()
 
-    outcome = await plan_turn(body.query, thread_id=str(thread.id))
+    try:
+        outcome = await plan_turn(body.query, thread_id=str(thread.id))
+    except Exception:
+        # Any planner failure leaves the thread FAILED so clients can surface or retry it.
+        thread.status = ThreadStatus.FAILED
+        await db.commit()
+        raise
 
     clarification = outcome.clarification
     itinerary = outcome.itinerary
@@ -149,10 +168,13 @@ async def send_message(
             db, thread_id=thread.id, role="assistant", content=clarification.message
         )
         thread.updated_at = datetime.now(timezone.utc)
+        thread.status = ThreadStatus.READY
         await db.commit()
         return SendMessageResponse(result=ClarificationResult(clarification=clarification))
 
     if itinerary is None:
+        thread.status = ThreadStatus.FAILED
+        await db.commit()
         raise _graph_error
 
     await message_repository.create_message(
@@ -164,6 +186,7 @@ async def send_message(
     )
 
     thread.updated_at = datetime.now(timezone.utc)
+    thread.status = ThreadStatus.READY
 
     await db.commit()
 

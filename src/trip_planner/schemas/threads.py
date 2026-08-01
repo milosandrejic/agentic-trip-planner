@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from trip_planner.models.thread import ThreadStatus
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 
@@ -20,6 +21,7 @@ class ThreadSummary(BaseModel):
     id: uuid.UUID
     title: str
     slug: str
+    status: ThreadStatus
     created_at: datetime
     updated_at: datetime
 
