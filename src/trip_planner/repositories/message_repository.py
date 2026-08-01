@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trip_planner.models.message import Message
@@ -59,15 +59,13 @@ async def list_by_thread(
 
 
 async def soft_delete_by_thread(db: AsyncSession, thread_id: uuid.UUID) -> None:
-    """Soft-delete all messages belonging to a thread."""
+    """Soft-delete every active message belonging to a thread in a single UPDATE."""
     now = datetime.now(timezone.utc)
 
-    messages_result = await db.execute(
-        select(Message).where(Message.thread_id == thread_id, Message.deleted_at.is_(None))
+    await db.execute(
+        update(Message)
+        .where(Message.thread_id == thread_id, Message.deleted_at.is_(None))
+        .values(deleted_at=now)
     )
-    messages = list(messages_result.scalars().all())
-
-    for message in messages:
-        message.deleted_at = now
 
     await db.flush()

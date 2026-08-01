@@ -175,45 +175,32 @@ async def test_list_by_thread_respects_limit_parameter() -> None:
 # --- soft_delete_by_thread ---
 
 
-async def test_soft_delete_by_thread_sets_deleted_at_on_all_messages() -> None:
+async def test_soft_delete_by_thread_issues_single_bulk_update() -> None:
     db = make_db()
     thread_id = uuid.uuid4()
-    msg_a = make_mock_message(thread_id)
-    msg_b = make_mock_message(thread_id)
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [msg_a, msg_b]
-    db.execute.return_value = mock_result
-
-    before = datetime.now(timezone.utc)
     await message_repository.soft_delete_by_thread(db, thread_id=thread_id)
 
-    assert msg_a.deleted_at is not None
-    assert msg_b.deleted_at is not None
-    assert msg_a.deleted_at >= before
-    assert msg_b.deleted_at >= before
+    # A single UPDATE statement soft-deletes every active row, no per-row loop.
+    db.execute.assert_awaited_once()
+    compiled = str(db.execute.call_args[0][0])
+    assert compiled.startswith("UPDATE messages SET deleted_at=")
+
+
+async def test_soft_delete_by_thread_targets_only_active_rows_of_the_thread() -> None:
+    db = make_db()
+    thread_id = uuid.uuid4()
+
+    await message_repository.soft_delete_by_thread(db, thread_id=thread_id)
+
+    compiled = str(db.execute.call_args[0][0])
+    assert "messages.thread_id =" in compiled
+    assert "messages.deleted_at IS NULL" in compiled
 
 
 async def test_soft_delete_by_thread_calls_flush() -> None:
     db = make_db()
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = []
-    db.execute.return_value = mock_result
-
-    await message_repository.soft_delete_by_thread(db, thread_id=uuid.uuid4())
-
-    db.flush.assert_awaited_once()
-
-
-async def test_soft_delete_by_thread_does_nothing_when_no_messages() -> None:
-    db = make_db()
-
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = []
-    db.execute.return_value = mock_result
-
-    # Should complete without error and flush once
     await message_repository.soft_delete_by_thread(db, thread_id=uuid.uuid4())
 
     db.flush.assert_awaited_once()

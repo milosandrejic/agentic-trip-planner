@@ -175,8 +175,8 @@
 ## Wave 5 — Stable Pagination + Bulk Soft Delete
 
 - [x] Composite `(created_at, id)` cursor for message listing; add pagination to thread listing (currently unpaginated)
-- [ ] Replace row-by-row loop in `soft_delete_by_thread` with a single bulk `UPDATE`
-- [ ] Tests: pagination stable under same-timestamp rows; bulk delete in one statement
+- [x] Replace row-by-row loop in `soft_delete_by_thread` with a single bulk `UPDATE`
+- [x] Tests: pagination stable under same-timestamp rows; bulk delete in one statement
 
 ## Wave 6 — Shared HTTP Clients + Retry Resilience
 
