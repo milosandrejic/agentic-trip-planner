@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from trip_planner.config import get_settings
+from trip_planner.services.http_client import get_http_client
 
 _BASE_URL = "https://api.duffel.com"
 _DUFFEL_VERSION = "v2"
@@ -31,15 +32,18 @@ class DuffelClient:
     and respects the Retry-After header when rate-limited.
     """
 
-    def __init__(self) -> None:
-        """Initialise the client using the configured Duffel API key."""
+    def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
+        """Initialise with the Duffel API key and an optional injected HTTP client.
+
+        When no client is supplied, the shared pooled client is resolved per request.
+        """
+        self._http_client = http_client
         self._headers = {
             "Authorization": f"Bearer {_settings.duffel_api_key}",
             "Duffel-Version": _DUFFEL_VERSION,
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-
     async def get(
         self, path: str, params: dict[str, str | int | float] | None = None
     ) -> dict[str, Any]:
@@ -63,12 +67,12 @@ class DuffelClient:
         exponential backoff starting at _BACKOFF_BASE seconds.
         """
         url = f"{_BASE_URL}{path}"
+        client = self._http_client or get_http_client()
 
         for attempt in range(_MAX_RETRIES):
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.request(
-                    method, url, headers=self._headers, params=params, json=json
-                )
+            response = await client.request(
+                method, url, headers=self._headers, params=params, json=json
+            )
 
             is_rate_limited = response.status_code == 429
             is_server_error = response.status_code >= 500

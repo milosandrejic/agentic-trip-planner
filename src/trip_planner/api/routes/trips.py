@@ -13,6 +13,8 @@ async def plan_trip(body: TripPlanRequest, _current_user: CurrentUser) -> TripPl
 
     itinerary = outcome.itinerary
     if itinerary is None:
+        # 500 because the graph completed successfully but violated its contract by not
+        # producing a structured itinerary.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Graph did not produce a structured itinerary",

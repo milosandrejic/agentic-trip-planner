@@ -31,7 +31,10 @@ _forbidden = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access
 _invalid_cursor = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pagination cursor"
 )
-_graph_error = HTTPException(
+
+# 500 because the graph violated its own contract: it completed without producing
+# either a structured itinerary or a clarification response.
+_invalid_graph_outcome = HTTPException(
     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     detail="Graph did not produce a structured itinerary or clarification",
 )
@@ -138,7 +141,7 @@ async def create_thread(
     if itinerary is None:
         thread.status = ThreadStatus.FAILED
         await db.commit()
-        raise _graph_error
+        raise _invalid_graph_outcome
 
     await message_repository.create_message(
         db,
@@ -207,7 +210,7 @@ async def send_message(
     if itinerary is None:
         thread.status = ThreadStatus.FAILED
         await db.commit()
-        raise _graph_error
+        raise _invalid_graph_outcome
 
     await message_repository.create_message(
         db,

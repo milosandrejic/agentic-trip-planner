@@ -10,6 +10,7 @@ from trip_planner.agents.graph import init_graph
 from trip_planner.api.routes import auth, health, threads, trips, users
 from trip_planner.config import get_settings
 from trip_planner.logging_config import configure_logging, get_logger
+from trip_planner.services.http_client import close_http_client, open_http_client
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -34,8 +35,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     async with AsyncPostgresSaver.from_conn_string(settings.checkpoint_db_url) as checkpointer:
         await checkpointer.setup()
         init_graph(checkpointer)
+        await open_http_client()
+
         log.info("app.startup", env=settings.app_env)
-        yield
+
+        try:
+            yield
+        finally:
+            await close_http_client()
     log.info("app.shutdown")
 
 

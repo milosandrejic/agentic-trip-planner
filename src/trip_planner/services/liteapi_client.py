@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from trip_planner.config import get_settings
+from trip_planner.services.http_client import get_http_client
 
 _BASE_URL = "https://api.liteapi.travel/v3.0"
 _MAX_RETRIES = 3
@@ -30,8 +31,12 @@ class LiteApiClient:
     Retry-After header when rate-limited.
     """
 
-    def __init__(self) -> None:
-        """Initialise the client using the configured LiteAPI key."""
+    def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
+        """Initialise with the LiteAPI key and an optional injected HTTP client.
+
+        When no client is supplied, the shared pooled client is resolved per request.
+        """
+        self._http_client = http_client
         self._headers = {
             "X-API-Key": _settings.liteapi_key,
             "Accept": "application/json",
@@ -61,12 +66,12 @@ class LiteApiClient:
         exponential backoff starting at _BACKOFF_BASE seconds.
         """
         url = f"{_BASE_URL}{path}"
+        client = self._http_client or get_http_client()
 
         for attempt in range(_MAX_RETRIES):
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.request(
-                    method, url, headers=self._headers, params=params, json=json
-                )
+            response = await client.request(
+                method, url, headers=self._headers, params=params, json=json
+            )
 
             is_rate_limited = response.status_code == 429
             is_server_error = response.status_code >= 500
