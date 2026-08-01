@@ -3,10 +3,8 @@ import uuid as uuid_lib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
-from langchain_core.messages import HumanMessage
 
-from trip_planner.agents.graph import run_planner
-from trip_planner.agents.state import TripPlannerState
+from trip_planner.agents.graph import plan_turn
 from trip_planner.api.dependencies import CurrentUser, DbSession
 from trip_planner.models.message import Message
 from trip_planner.models.thread import Thread
@@ -81,14 +79,10 @@ async def create_thread(
     )
     await db.commit()
 
-    initial_state = TripPlannerState(
-        messages=[HumanMessage(content=body.query)],
-        trip_request=body.query,
-    )
-    result = await run_planner(initial_state, thread_id=str(thread.id))
+    outcome = await plan_turn(body.query, thread_id=str(thread.id))
 
-    clarification = result.get("pending_clarification")
-    itinerary = result.get("current_itinerary")
+    clarification = outcome.clarification
+    itinerary = outcome.itinerary
 
     if clarification is not None:
         await message_repository.create_message(
@@ -145,15 +139,10 @@ async def send_message(
     )
     await db.commit()
 
-    follow_up_state = TripPlannerState(
-        messages=[HumanMessage(content=body.query)],
-        trip_request=body.query,
-    )
+    outcome = await plan_turn(body.query, thread_id=str(thread.id))
 
-    result = await run_planner(follow_up_state, thread_id=str(thread.id))
-
-    clarification = result.get("pending_clarification")
-    itinerary = result.get("current_itinerary")
+    clarification = outcome.clarification
+    itinerary = outcome.itinerary
 
     if clarification is not None:
         await message_repository.create_message(

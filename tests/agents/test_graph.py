@@ -7,10 +7,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 import trip_planner.agents.graph as graph_module
 from trip_planner.agents.graph import (
+    PlannerOutcome,
     _route_after_reason,
     _route_after_triage,
     format_node,
     init_graph,
+    plan_turn,
     reason_node,
     run_planner,
     triage_node,
@@ -371,6 +373,31 @@ async def test_triage_node_feeds_conversation_history_to_the_llm() -> None:
 
 
 # --- run_planner graph selection ---
+
+
+async def test_plan_turn_returns_only_the_user_visible_outcome() -> None:
+    itinerary = _make_itinerary()
+    # run_planner hands back full execution state; plan_turn must expose only clarification/itinerary.
+    planner_state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days"), AIMessage(content="Here is your plan.")],
+        trip_request="Paris 7 days",
+        current_itinerary=itinerary,
+        tool_call_count=3,
+        tool_results=[],
+    )
+
+    with patch("trip_planner.agents.graph.run_planner", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = planner_state
+        outcome = await plan_turn("Paris 7 days", thread_id="abc-123")
+
+    assert isinstance(outcome, PlannerOutcome)
+    assert outcome.itinerary == itinerary
+    assert outcome.clarification is None
+
+    called_state = mock_run.call_args[0][0]
+    assert called_state["trip_request"] == "Paris 7 days"
+    assert called_state["messages"][0].content == "Paris 7 days"
+    assert mock_run.call_args[1]["thread_id"] == "abc-123"
 
 
 async def test_run_planner_uses_stateful_graph_with_thread_id() -> None:

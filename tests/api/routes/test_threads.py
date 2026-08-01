@@ -4,9 +4,8 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import AsyncClient
-from langchain_core.messages import AIMessage, HumanMessage
 
-from trip_planner.agents.state import TripPlannerState
+from trip_planner.agents.graph import PlannerOutcome
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
 from trip_planner.services.auth_service import create_access_token
@@ -14,7 +13,7 @@ from trip_planner.services.auth_service import create_access_token
 _DEPS_GET_USER = "trip_planner.api.dependencies.user_repository.get_user_by_id"
 _THREAD_REPO = "trip_planner.api.routes.threads.thread_repository"
 _MESSAGE_REPO = "trip_planner.api.routes.threads.message_repository"
-_RUN_PLANNER = "trip_planner.api.routes.threads.run_planner"
+_PLAN_TURN = "trip_planner.api.routes.threads.plan_turn"
 
 
 def make_mock_user(user_id: uuid.UUID | None = None) -> MagicMock:
@@ -35,27 +34,17 @@ def make_itinerary(destination: str = "Paris") -> Itinerary:
     )
 
 
-def make_plan_result(itinerary: Itinerary | None = None) -> TripPlannerState:
+def make_plan_result(itinerary: Itinerary | None = None) -> PlannerOutcome:
     resolved = itinerary or make_itinerary()
-    human_msg = HumanMessage(content="Paris 7 days")
-    ai_msg = AIMessage(content="Here is your itinerary.")
-    return TripPlannerState(
-        messages=[human_msg, ai_msg],
-        trip_request="Paris 7 days",
-        current_itinerary=resolved,
-    )
+    return PlannerOutcome(itinerary=resolved)
 
 
-def make_clarification_result(message: str = "Could you tell me where and how long?") -> TripPlannerState:
+def make_clarification_result(message: str = "Could you tell me where and how long?") -> PlannerOutcome:
     clarification = ClarificationRequest(
         message=message,
         missing_fields=["destination", "duration"],
     )
-    return TripPlannerState(
-        messages=[],
-        trip_request="plan me a trip",
-        pending_clarification=clarification,
-    )
+    return PlannerOutcome(clarification=clarification)
 
 
 def make_mock_thread(user_id: uuid.UUID) -> MagicMock:
@@ -95,7 +84,7 @@ async def test_create_thread_returns_201_with_thread_and_itinerary(db_client: As
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -127,7 +116,7 @@ async def test_create_thread_passes_query_to_planner(db_client: AsyncClient) -> 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -140,10 +129,9 @@ async def test_create_thread_passes_query_to_planner(db_client: AsyncClient) -> 
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    called_state: TripPlannerState = mock_planner.call_args[0][0]
+    called_query: str = mock_planner.call_args[0][0]
     called_thread_id: str = mock_planner.call_args[1]["thread_id"]
-    assert called_state["trip_request"] == query
-    assert called_state["messages"][0].content == query
+    assert called_query == query
     assert called_thread_id == str(thread.id)
 
 
@@ -157,7 +145,7 @@ async def test_create_thread_persists_human_and_assistant_messages(db_client: As
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock) as mock_create_message,
     ):
         mock_get_user.return_value = user
@@ -187,14 +175,14 @@ async def test_create_thread_commits_request_before_running_ai(
     thread = make_mock_thread(user.id)
     commits_before_ai: dict[str, int] = {}
 
-    async def capture_commit_count(*_args: object, **_kwargs: object) -> TripPlannerState:
+    async def capture_commit_count(*_args: object, **_kwargs: object) -> PlannerOutcome:
         commits_before_ai["count"] = mock_db_session.commit.await_count
         return result
 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -218,12 +206,12 @@ async def test_create_thread_returns_500_when_graph_returns_no_itinerary(
     user = make_mock_user()
     token = create_access_token(str(user.id))
     thread = make_mock_thread(user.id)
-    empty_result = TripPlannerState(messages=[], trip_request="Paris 7 days")
+    empty_result = PlannerOutcome()
 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
     ):
         mock_get_user.return_value = user
         mock_create_thread.return_value = thread
@@ -277,7 +265,7 @@ async def test_send_message_returns_200_with_itinerary(db_client: AsyncClient) -
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -305,7 +293,7 @@ async def test_send_message_passes_query_to_planner(db_client: AsyncClient) -> N
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -318,10 +306,9 @@ async def test_send_message_passes_query_to_planner(db_client: AsyncClient) -> N
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    called_state: TripPlannerState = mock_planner.call_args[0][0]
+    called_query: str = mock_planner.call_args[0][0]
     called_thread_id: str = mock_planner.call_args[1]["thread_id"]
-    assert called_state["trip_request"] == query
-    assert called_state["messages"][0].content == query
+    assert called_query == query
     assert called_thread_id == str(thread.id)
 
 
@@ -334,14 +321,14 @@ async def test_send_message_commits_request_before_running_ai(
     thread = make_mock_thread(user.id)
     commits_before_ai: dict[str, int] = {}
 
-    async def capture_commit_count(*_args: object, **_kwargs: object) -> TripPlannerState:
+    async def capture_commit_count(*_args: object, **_kwargs: object) -> PlannerOutcome:
         commits_before_ai["count"] = mock_db_session.commit.await_count
         return result
 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -411,12 +398,12 @@ async def test_send_message_returns_500_when_graph_returns_no_itinerary(
     user = make_mock_user()
     token = create_access_token(str(user.id))
     thread = make_mock_thread(user.id)
-    empty_result = TripPlannerState(messages=[], trip_request="")
+    empty_result = PlannerOutcome()
 
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
     ):
         mock_get_user.return_value = user
         mock_get_thread.return_value = thread
@@ -667,7 +654,7 @@ async def test_create_thread_returns_201_with_clarification_when_request_is_vagu
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -683,7 +670,7 @@ async def test_create_thread_returns_201_with_clarification_when_request_is_vagu
     assert response.status_code == 201
     body = response.json()
     assert body["result"]["type"] == "clarification"
-    expected_clarification = result.get("pending_clarification")
+    expected_clarification = result.clarification
     assert expected_clarification is not None
     assert body["result"]["clarification"]["message"] == expected_clarification.message
     assert "destination" in body["result"]["clarification"]["missing_fields"]
@@ -701,7 +688,7 @@ async def test_create_thread_persists_clarification_as_assistant_message(
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock) as mock_create_message,
     ):
         mock_get_user.return_value = user
@@ -733,7 +720,7 @@ async def test_send_message_returns_200_with_clarification_on_vague_follow_up(
     with (
         patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
         patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_RUN_PLANNER, new_callable=AsyncMock) as mock_planner,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
         patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
     ):
         mock_get_user.return_value = user
@@ -749,6 +736,6 @@ async def test_send_message_returns_200_with_clarification_on_vague_follow_up(
     assert response.status_code == 200
     body = response.json()
     assert body["result"]["type"] == "clarification"
-    expected_clarification = result.get("pending_clarification")
+    expected_clarification = result.clarification
     assert expected_clarification is not None
     assert body["result"]["clarification"]["message"] == expected_clarification.message

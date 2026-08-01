@@ -168,7 +168,7 @@
 ## Wave 4 — Follow-up Triage + Memory Ownership + Thread Lifecycle
 
 - [x] Follow-up aware triage — use conversation history, classify intent: New Trip | Itinerary Modification | Clarification Answer | Trip Question; do **not** re-clarify when an itinerary already exists
-- [ ] Define memory ownership: LangGraph checkpoint = execution state; application DB (threads/messages) = user-visible conversation
+- [x] Define memory ownership: LangGraph checkpoint = execution state; application DB (threads/messages) = user-visible conversation
 - [ ] Thread lifecycle `status` column (Pending / Running / Ready / Failed / Deleted) + Alembic migration + transitions
 - [ ] Tests: follow-up modification (no re-clarify), clarification answer flow, intent classification, status transitions
 
@@ -181,6 +181,7 @@
 ## Wave 6 — Shared HTTP Clients + Retry Resilience
 
 - [ ] Lifespan-managed pooled `httpx.AsyncClient`(s) injected into service clients (replace per-request `AsyncClient`)
+- [ ] Configure request timeouts (connect/read/write) centrally for every provider
 - [ ] Retry on network failures (`ConnectError`, `TimeoutException`, connection resets) in addition to 429/5xx; handle non-JSON error bodies gracefully
 - [ ] Tests: retries on `ConnectError`/timeout; non-JSON error handled; shared client reused
 
@@ -194,26 +195,26 @@
 > `Trip → Thread → (Messages + LangGraph Checkpoints)`. Responsibilities are separated —
 > **Trip** owns destination/budget/itinerary/selected flights+hotels/metadata; **Thread** owns
 > conversation history + LangGraph execution state/checkpoints.
-> - `POST /trips` — the trip-centric entry point: create Trip, create Thread automatically,
->   invoke the **stateful** graph, write the first checkpoint, return the first assistant
->   response. Always starts a new conversation (supersedes today's `POST /threads`).
-> - `POST /threads/{thread_id}/messages` — continue only: load checkpoint, resume, save
->   checkpoint, return response. Never creates Trips.
-> - Every MVP trip is a persistent, resumable conversation (survives refresh / return-next-day),
->   so the stateful graph is the default. The stateless graph was **removed** in Wave 2; decide
->   here whether `/trips/plan` is kept (now stateful) or folded into `POST /trips`.
+>
+> - `POST /trips` — the only entry point for creating a new trip. Creates Trip, creates Thread automatically, invokes the stateful graph, writes the first checkpoint and returns the first assistant response.
+> - `POST /threads/{thread_id}/messages` — continue only. Load checkpoint, resume graph, persist checkpoint and return response. Never creates Trips.
+> - Remove `POST /threads` once `POST /trips` is introduced. Threads become an internal implementation detail of a Trip rather than a top-level resource for creating conversations.
+> - Remove `POST /trips/plan` or keep it only as a temporary thin alias until clients migrate, then delete it.
+> - Every MVP trip is a persistent, resumable conversation (survives refresh / return-next-day), so the stateful graph is the default.
 
 - [ ] Introduce `Trip` + `ItineraryVersion` — stop storing itinerary JSON only inside assistant messages; persist versioned itineraries (edit/version/rollback)
 - [ ] Trip lifecycle states: Draft / Generating / Ready / Completed / Archived (status column + transitions)
 - [ ] Provider-independent `Place` model (provider, external_id, coordinates, metadata) so activities aren't coupled to provider IDs
 - [ ] Persist Selected Flight / Selected Hotel separately from search results
-- [ ] Decide the fate of `POST /trips/plan` (fold into `POST /trips` vs keep as a thin stateful alias) once `POST /trips` lands
-- [ ] Tests: trip versioning/rollback, status transitions, place normalization, selection persistence
+- [ ] Move thread orchestration into a dedicated application service (`TripPlanningService`) so routers no longer orchestrate graph execution and persistence
+- [ ] Persist assistant responses, itinerary versions and thread lifecycle atomically within the new Trip workflow
+- [ ] Tests: trip versioning/rollback, status transitions, place normalization, selection persistence, creation flow through `POST /trips`, continuation through `POST /threads/{thread_id}/messages`
 
 ## Wave 8 — Trip Validation Engine (future product)
 
 - [ ] Post-generation pipeline: Generate → Route optimization → Constraint validation → Repair invalid days
 - [ ] Validate opening hours, travel time, weather conflicts, arrival/departure constraints, activity overlap
+- [ ] Explain validation repairs (attach validation notes to itinerary)
 - [ ] Tests: constraint violations detected + repaired; validated itinerary output
 
 > **Deferred to post-MVP:** checkpoint cleanup / retention policy (tied to account deletion

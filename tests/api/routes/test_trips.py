@@ -4,9 +4,8 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import AsyncClient
-from langchain_core.messages import AIMessage, HumanMessage
 
-from trip_planner.agents.state import TripPlannerState
+from trip_planner.agents.graph import PlannerOutcome
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary, Source
 from trip_planner.services.auth_service import create_access_token
 
@@ -33,13 +32,9 @@ def make_itinerary(destination: str = "Paris") -> Itinerary:
     )
 
 
-def make_plan_result(itinerary: Itinerary | None = None) -> TripPlannerState:
+def make_plan_result(itinerary: Itinerary | None = None) -> PlannerOutcome:
     resolved = itinerary or make_itinerary()
-    return TripPlannerState(
-        messages=[HumanMessage(content="Paris 7 days"), AIMessage(content="Here is your itinerary.")],
-        trip_request="Paris 7 days",
-        current_itinerary=resolved,
-    )
+    return PlannerOutcome(itinerary=resolved)
 
 
 # --- POST /trips/plan ---
@@ -53,7 +48,7 @@ async def test_plan_trip_returns_200_with_itinerary(db_client: AsyncClient) -> N
 
     with (
         patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
-        patch("trip_planner.api.routes.trips.run_planner", new_callable=AsyncMock) as mock_planner,
+        patch("trip_planner.api.routes.trips.plan_turn", new_callable=AsyncMock) as mock_planner,
     ):
         mock_user.return_value = user
         mock_planner.return_value = result
@@ -83,7 +78,7 @@ async def test_plan_trip_returns_200_with_sources(db_client: AsyncClient) -> Non
 
     with (
         patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
-        patch("trip_planner.api.routes.trips.run_planner", new_callable=AsyncMock) as mock_planner,
+        patch("trip_planner.api.routes.trips.plan_turn", new_callable=AsyncMock) as mock_planner,
     ):
         mock_user.return_value = user
         mock_planner.return_value = result
@@ -142,7 +137,7 @@ async def test_plan_trip_passes_query_to_planner(db_client: AsyncClient) -> None
 
     with (
         patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
-        patch("trip_planner.api.routes.trips.run_planner", new_callable=AsyncMock) as mock_planner,
+        patch("trip_planner.api.routes.trips.plan_turn", new_callable=AsyncMock) as mock_planner,
     ):
         mock_user.return_value = user
         mock_planner.return_value = result
@@ -153,22 +148,18 @@ async def test_plan_trip_passes_query_to_planner(db_client: AsyncClient) -> None
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    called_state: TripPlannerState = mock_planner.call_args[0][0]
-    assert called_state["trip_request"] == query
-    assert called_state["messages"][0].content == query
+    called_query: str = mock_planner.call_args[0][0]
+    assert called_query == query
 
 
 async def test_plan_trip_raises_500_when_graph_returns_no_itinerary(db_client: AsyncClient) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
-    empty_result = TripPlannerState(
-        messages=[],
-        trip_request="Paris 7 days",
-    )
+    empty_result = PlannerOutcome()
 
     with (
         patch("trip_planner.api.dependencies.user_repository.get_user_by_id", new_callable=AsyncMock) as mock_user,
-        patch("trip_planner.api.routes.trips.run_planner", new_callable=AsyncMock) as mock_planner,
+        patch("trip_planner.api.routes.trips.plan_turn", new_callable=AsyncMock) as mock_planner,
     ):
         mock_user.return_value = user
         mock_planner.return_value = empty_result

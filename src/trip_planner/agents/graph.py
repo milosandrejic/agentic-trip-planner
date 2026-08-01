@@ -5,7 +5,7 @@ from datetime import date
 from enum import Enum
 from typing import Literal, cast
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -347,4 +347,36 @@ async def run_planner(state: TripPlannerState, thread_id: str | None = None) -> 
         ) from exc
 
     return cast(TripPlannerState, result)
+
+
+class PlannerOutcome(BaseModel):
+    """The user-visible result of a planning turn — the only agent output the app may consume.
+
+    Execution state (the accumulated message history, tool results, and tool-call budget) is
+    owned by the LangGraph checkpoint and is deliberately excluded here so it can never leak
+    into the application database. See docs/ARCHITECTURE.md ("Memory ownership").
+    """
+    clarification: ClarificationRequest | None = None
+    itinerary: Itinerary | None = None
+
+
+async def plan_turn(query: str, thread_id: str | None = None) -> PlannerOutcome:
+    """Run one planning turn and return only the user-visible outcome.
+
+    This is the sole boundary between the agent and the application. Callers pass the user's
+    message and the owning thread id; the agent's execution state lives entirely in the
+    checkpoint keyed by that thread id and is never exposed to the caller. A new turn only ever
+    contributes the latest human message — prior context is restored from the checkpoint.
+    """
+    state = TripPlannerState(
+        messages=[HumanMessage(content=query)],
+        trip_request=query,
+    )
+    result = await run_planner(state, thread_id=thread_id)
+
+    return PlannerOutcome(
+        clarification=result.get("pending_clarification"),
+        itinerary=result.get("current_itinerary"),
+    )
+
 
