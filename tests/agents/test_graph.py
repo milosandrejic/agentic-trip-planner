@@ -344,6 +344,30 @@ async def test_triage_node_lets_modifications_proceed_without_clarifying() -> No
     assert _route_after_triage(result) == "reason"
 
 
+async def test_triage_node_lets_clarification_answers_proceed_without_reclarifying() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    # The thread previously asked for missing details; the user is now answering, so proceed.
+    decision = _TriageDecision(
+        intent=_TriageIntent.CLARIFICATION_ANSWER, should_clarify=False, clarification=None
+    )
+    state = TripPlannerState(
+        messages=[
+            HumanMessage(content="plan me a trip"),
+            AIMessage(content="Where would you like to go and for how long?"),
+            HumanMessage(content="Paris, 7 days in July"),
+        ],
+        trip_request="Paris, 7 days in July",
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("pending_clarification") is None
+    assert _route_after_triage(result) == "reason"
+
+
 async def test_triage_node_feeds_conversation_history_to_the_llm() -> None:
     from trip_planner.agents.graph import _TriageDecision, _TriageIntent
 

@@ -170,7 +170,7 @@
 - [x] Follow-up aware triage — use conversation history, classify intent: New Trip | Itinerary Modification | Clarification Answer | Trip Question; do **not** re-clarify when an itinerary already exists
 - [x] Define memory ownership: LangGraph checkpoint = execution state; application DB (threads/messages) = user-visible conversation
 - [x] Thread lifecycle `status` column (Pending / Running / Ready / Failed / Deleted) + Alembic migration + transitions
-- [ ] Tests: follow-up modification (no re-clarify), clarification answer flow, intent classification, status transitions
+- [x] Tests: follow-up modification (no re-clarify), clarification answer flow, intent classification, status transitions
 
 ## Wave 5 — Stable Pagination + Bulk Soft Delete
 

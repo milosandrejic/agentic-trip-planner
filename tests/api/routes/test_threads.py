@@ -787,6 +787,32 @@ async def test_create_thread_persists_clarification_as_assistant_message(
     assert assistant_call.kwargs["content"] == clarification_message
 
 
+async def test_create_thread_marks_thread_ready_on_clarification(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+    thread.status = ThreadStatus.PENDING
+    result = make_clarification_result()
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
+        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
+        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
+    ):
+        mock_get_user.return_value = user
+        mock_create_thread.return_value = thread
+        mock_planner.return_value = result
+
+        await db_client.post(
+            "/threads",
+            json={"query": "Plan me a trip please help"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert thread.status == ThreadStatus.READY
+
+
 async def test_send_message_returns_200_with_clarification_on_vague_follow_up(
     db_client: AsyncClient,
 ) -> None:
