@@ -50,6 +50,20 @@ async def test_get_returns_json_on_200() -> None:
     assert result == payload
 
 
+async def test_falls_back_to_shared_pooled_client_when_none_injected() -> None:
+    shared_client = _make_client([_make_response({"data": "ok"}, 200)])
+
+    with patch(
+        "trip_planner.services.duffel_client.get_http_client", return_value=shared_client
+    ) as mock_get:
+        client = DuffelClient()
+        result = await client.get("/air/offers")
+
+    assert result == {"data": "ok"}
+    mock_get.assert_called_once_with()
+    shared_client.request.assert_awaited_once()
+
+
 # --- post ---
 
 
