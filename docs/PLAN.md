@@ -182,7 +182,7 @@
 
 - [x] Lifespan-managed pooled `httpx.AsyncClient`(s) injected into service clients (replace per-request `AsyncClient`)
 - [x] Configure request timeouts (connect/read/write) centrally for every provider
-- [ ] Retry on network failures (`ConnectError`, `TimeoutException`, connection resets) in addition to 429/5xx; handle non-JSON error bodies gracefully
+- [x] Retry on network failures (`ConnectError`, `TimeoutException`, connection resets) in addition to 429/5xx; handle non-JSON error bodies gracefully
 - [ ] Tests: retries on `ConnectError`/timeout; non-JSON error handled; shared client reused
 
 ## Wave 7 — Domain Model Evolution: Trip, ItineraryVersion, Place, Selections

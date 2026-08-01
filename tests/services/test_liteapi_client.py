@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -17,10 +18,22 @@ def _make_response(json_data: object, status_code: int = 200) -> MagicMock:
     return response
 
 
-def _make_client(responses: list[MagicMock]) -> MagicMock:
-    """Return a mock pooled httpx.AsyncClient whose request() yields the given responses."""
+def _make_non_json_response(text: str, status_code: int) -> MagicMock:
+    response = MagicMock(spec=httpx.Response)
+    response.status_code = status_code
+    response.json.side_effect = ValueError("no json to decode")
+    response.text = text
+    response.headers = {}
+    return response
+
+
+def _make_client(responses: Sequence[object]) -> MagicMock:
+    """Return a mock pooled httpx.AsyncClient whose request() yields the given items.
+
+    List items that are exceptions are raised; responses are returned.
+    """
     client = MagicMock(spec=httpx.AsyncClient)
-    client.request = AsyncMock(side_effect=responses)
+    client.request = AsyncMock(side_effect=list(responses))
     return client
 
 
@@ -136,3 +149,67 @@ async def test_uses_retry_after_header_for_wait_duration() -> None:
         await client.get("/data/hotels")
 
     mock_sleep.assert_awaited_once_with(5.0)
+
+
+# --- network resilience ---
+
+
+async def test_retries_on_connect_error_then_succeeds() -> None:
+    success = _make_response({"data": "ok"}, 200)
+    mock_client = _make_client([httpx.ConnectError("connection refused"), success])
+
+    with patch(_PATCH_SLEEP, new_callable=AsyncMock):
+        client = LiteApiClient(http_client=mock_client)
+        result = await client.get("/data/hotels")
+
+    assert result == {"data": "ok"}
+    assert mock_client.request.call_count == 2
+
+
+async def test_retries_on_read_timeout_then_succeeds() -> None:
+    success = _make_response({"data": "ok"}, 200)
+    mock_client = _make_client([httpx.ReadTimeout("timed out"), success])
+
+    with patch(_PATCH_SLEEP, new_callable=AsyncMock):
+        client = LiteApiClient(http_client=mock_client)
+        result = await client.get("/data/hotels")
+
+    assert result == {"data": "ok"}
+    assert mock_client.request.call_count == 2
+
+
+async def test_raises_liteapi_error_after_network_retries_exhausted() -> None:
+    errors: list[object] = [httpx.ConnectError("connection reset")] * 3
+    mock_client = _make_client(errors)
+
+    with patch(_PATCH_SLEEP, new_callable=AsyncMock):
+        client = LiteApiClient(http_client=mock_client)
+        with pytest.raises(LiteApiError) as exc_info:
+            await client.get("/data/hotels")
+
+    assert exc_info.value.status_code == 503
+    assert mock_client.request.call_count == 3
+
+
+async def test_raises_liteapi_error_with_text_on_non_json_error_body() -> None:
+    non_json = _make_non_json_response("<html>Bad Request</html>", 400)
+    mock_client = _make_client([non_json])
+
+    client = LiteApiClient(http_client=mock_client)
+    with pytest.raises(LiteApiError) as exc_info:
+        await client.get("/data/hotels")
+
+    assert exc_info.value.status_code == 400
+    assert "Bad Request" in exc_info.value.detail
+
+
+async def test_raises_liteapi_error_with_text_when_body_is_not_an_object() -> None:
+    array_body = _make_response(["unexpected"], 400)
+    mock_client = _make_client([array_body])
+
+    client = LiteApiClient(http_client=mock_client)
+    with pytest.raises(LiteApiError) as exc_info:
+        await client.get("/data/hotels")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == array_body.text

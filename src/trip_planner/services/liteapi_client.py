@@ -10,6 +10,16 @@ from trip_planner.services.http_client import get_http_client
 _BASE_URL = "https://api.liteapi.travel/v3.0"
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 1.0  # seconds; wait doubles on each retry
+_UNAVAILABLE_STATUS = 503  # synthetic code when the API can't be reached at all
+
+# Transient transport failures worth retrying: refused connects, timeouts, and resets.
+_RETRIABLE_NETWORK_ERRORS = (
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
 
 _settings = get_settings()
 
@@ -60,18 +70,28 @@ class LiteApiClient:
         params: dict[str, str | int | float] | None = None,
         json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Execute the request, retrying on transient 429 and 5xx responses.
+        """Execute the request, retrying on transient network, 429, and 5xx failures.
 
-        Waits respect the Retry-After header when present; otherwise uses
-        exponential backoff starting at _BACKOFF_BASE seconds.
+        Network errors (connect failures, timeouts, resets) and 429 / 5xx responses
+        are retried with exponential backoff; waits honour Retry-After when present.
+        A network failure that outlives every retry surfaces as a LiteApiError so
+        callers handle it the same way as an HTTP error.
         """
         url = f"{_BASE_URL}{path}"
         client = self._http_client or get_http_client()
 
         for attempt in range(_MAX_RETRIES):
-            response = await client.request(
-                method, url, headers=self._headers, params=params, json=json
-            )
+            is_last_attempt = attempt == _MAX_RETRIES - 1
+
+            try:
+                response = await client.request(
+                    method, url, headers=self._headers, params=params, json=json
+                )
+            except _RETRIABLE_NETWORK_ERRORS as exc:
+                if is_last_attempt:
+                    raise LiteApiError(_UNAVAILABLE_STATUS, f"network error: {exc}") from exc
+                await asyncio.sleep(_BACKOFF_BASE * (2**attempt))
+                continue
 
             is_rate_limited = response.status_code == 429
             is_server_error = response.status_code >= 500
@@ -80,8 +100,6 @@ class LiteApiClient:
             if not should_retry:
                 self._raise_for_liteapi_error(response)
                 return response.json()  # type: ignore[no-any-return]
-
-            is_last_attempt = attempt == _MAX_RETRIES - 1
 
             if is_last_attempt:
                 self._raise_for_liteapi_error(response)
@@ -103,9 +121,22 @@ class LiteApiClient:
         if not is_error:
             return
 
-        body: dict[str, Any] = response.json()  # type: ignore[assignment]
-        error: dict[str, Any] = body.get("error", {})  # type: ignore[assignment]
+        raise LiteApiError(
+            status_code=response.status_code, detail=self._error_detail(response)
+        )
 
+    def _error_detail(self, response: httpx.Response) -> str:
+        """Extract a human-readable error detail, tolerating non-JSON bodies."""
+        try:
+            parsed: object = response.json()
+        except ValueError:
+            return response.text
+
+        if not isinstance(parsed, dict):
+            return response.text
+
+        body: dict[str, Any] = parsed  # type: ignore[assignment]
+        error: dict[str, Any] = body.get("error", {})  # type: ignore[assignment]
         detail = error.get("description", response.text)
 
-        raise LiteApiError(status_code=response.status_code, detail=str(detail))
+        return str(detail)
