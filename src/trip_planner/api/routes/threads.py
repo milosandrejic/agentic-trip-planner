@@ -6,13 +6,14 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from trip_planner.agents.graph import plan_turn
 from trip_planner.api.dependencies import CurrentUser, DbSession
+from trip_planner.core.pagination import decode_cursor, encode_cursor
 from trip_planner.models.message import Message
 from trip_planner.models.thread import Thread, ThreadStatus
 from trip_planner.repositories import message_repository, thread_repository
 from trip_planner.schemas.threads import (
+    ClarificationResult,
     CreateThreadRequest,
     CreateThreadResponse,
-    ClarificationResult,
     ItineraryResult,
     MessageOut,
     SendMessageRequest,
@@ -27,10 +28,41 @@ router = APIRouter(prefix="/threads", tags=["threads"])
 
 _not_found = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 _forbidden = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+_invalid_cursor = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pagination cursor"
+)
 _graph_error = HTTPException(
     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     detail="Graph did not produce a structured itinerary or clarification",
 )
+
+def _decode_cursor_or_400(cursor: str | None) -> tuple[datetime, uuid_lib.UUID] | None:
+    """Decode an opaque cursor into its (timestamp, id) pair, raising 400 when malformed."""
+    if cursor is None:
+        return None
+
+    try:
+        return decode_cursor(cursor)
+    except ValueError:
+        raise _invalid_cursor from None
+
+def _next_message_cursor(messages: list[Message], limit: int) -> str | None:
+    """Return the next-page cursor, or None when the page isn't full."""
+    if len(messages) < limit:
+        return None
+
+    last = messages[-1]
+
+    return encode_cursor(last.created_at, last.id)
+
+def _next_thread_cursor(threads: list[Thread], limit: int) -> str | None:
+    """Return the next-page cursor, or None when the page isn't full."""
+    if len(threads) < limit:
+        return None
+
+    last = threads[-1]
+
+    return encode_cursor(last.updated_at, last.id)
 
 def _make_slug(text: str) -> str:
     """Build a URL-safe slug from text with a random suffix to prevent collisions."""
@@ -196,20 +228,26 @@ async def send_message(
 async def list_threads(
     current_user: CurrentUser,
     db: DbSession,
+    cursor: str | None = Query(default=None, description="Opaque cursor for the next page"),
+    limit: int = Query(default=20, ge=1, le=100),
 ) -> ThreadListResponse:
-    """List all active threads belonging to the current user, newest first."""
-    threads = await thread_repository.list_by_user(db, user_id=current_user.id)
+    """List active threads for the current user, newest first, with keyset pagination."""
+    decoded_cursor = _decode_cursor_or_400(cursor)
+    threads = await thread_repository.list_by_user(
+        db, user_id=current_user.id, cursor=decoded_cursor, limit=limit
+    )
 
-    return ThreadListResponse(threads=[_to_thread_summary(t) for t in threads])
+    return ThreadListResponse(
+        threads=[_to_thread_summary(t) for t in threads],
+        next_cursor=_next_thread_cursor(threads, limit),
+    )
 
 @router.get("/{thread_id}", response_model=ThreadDetailResponse, status_code=status.HTTP_200_OK)
 async def get_thread(
     thread_id: uuid_lib.UUID,
     current_user: CurrentUser,
     db: DbSession,
-    before: datetime | None = Query(
-        default=None, description="Cursor: fetch messages before this timestamp"
-    ),
+    cursor: str | None = Query(default=None, description="Opaque cursor for the next page"),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ThreadDetailResponse:
     """Return thread metadata and a paginated page of messages (newest first)."""
@@ -222,13 +260,15 @@ async def get_thread(
     if not is_owner:
         raise _forbidden
 
+    decoded_cursor = _decode_cursor_or_400(cursor)
     messages = await message_repository.list_by_thread(
-        db, thread_id=thread.id, before=before, limit=limit
+        db, thread_id=thread.id, cursor=decoded_cursor, limit=limit
     )
 
     return ThreadDetailResponse(
         thread=_to_thread_summary(thread),
         messages=[_to_message_out(m) for m in messages],
+        next_cursor=_next_message_cursor(messages, limit),
     )
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)

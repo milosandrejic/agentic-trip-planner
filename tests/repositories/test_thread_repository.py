@@ -151,6 +151,50 @@ async def test_list_by_user_returns_empty_list_when_no_threads() -> None:
     assert result == []
 
 
+async def test_list_by_user_orders_by_updated_at_then_id_for_stable_paging() -> None:
+    db = make_db()
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    db.execute.return_value = mock_result
+
+    await thread_repository.list_by_user(db, user_id=uuid.uuid4())
+
+    compiled = str(db.execute.call_args[0][0])
+    # id is the tiebreaker so rows sharing an updated_at keep a deterministic order.
+    assert "ORDER BY threads.updated_at DESC, threads.id DESC" in compiled
+
+
+async def test_list_by_user_cursor_uses_composite_updated_at_and_id_predicate() -> None:
+    db = make_db()
+    cursor = (datetime.now(timezone.utc), uuid.uuid4())
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    db.execute.return_value = mock_result
+
+    await thread_repository.list_by_user(db, user_id=uuid.uuid4(), cursor=cursor)
+
+    compiled = str(db.execute.call_args[0][0])
+    # Keyset predicate: updated_at < cursor OR (updated_at == cursor AND id < cursor_id).
+    assert "threads.updated_at <" in compiled
+    assert "threads.updated_at =" in compiled
+    assert "threads.id <" in compiled
+
+
+async def test_list_by_user_respects_limit_parameter() -> None:
+    db = make_db()
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    db.execute.return_value = mock_result
+
+    await thread_repository.list_by_user(db, user_id=uuid.uuid4(), limit=5)
+
+    compiled = str(db.execute.call_args[0][0])
+    assert "LIMIT" in compiled
+
+
 # --- soft_delete ---
 
 

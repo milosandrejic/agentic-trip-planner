@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trip_planner.models.message import Message
@@ -29,22 +29,29 @@ async def list_by_thread(
     db: AsyncSession,
     thread_id: uuid.UUID,
     *,
-    before: datetime | None = None,
+    cursor: tuple[datetime, uuid.UUID] | None = None,
     limit: int = 20,
 ) -> list[Message]:
-    """Return active messages for a thread, newest first, with cursor pagination.
+    """Return active messages for a thread, newest first, with keyset pagination.
 
-    Pass `before` (a `created_at` value) to fetch the page preceding that timestamp.
+    Pass `cursor` (a `(created_at, id)` pair) to fetch the page after that row.
+    The composite key keeps paging stable when several rows share a `created_at`.
     """
     query = select(Message).where(
         Message.thread_id == thread_id,
         Message.deleted_at.is_(None),
     )
 
-    if before is not None:
-        query = query.where(Message.created_at < before)
+    if cursor is not None:
+        cursor_created_at, cursor_id = cursor
+        query = query.where(
+            or_(
+                Message.created_at < cursor_created_at,
+                and_(Message.created_at == cursor_created_at, Message.id < cursor_id),
+            )
+        )
 
-    query = query.order_by(Message.created_at.desc()).limit(limit)
+    query = query.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit)
 
     result = await db.execute(query)
 

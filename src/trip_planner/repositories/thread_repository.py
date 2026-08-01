@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from trip_planner.models.thread import Thread, ThreadStatus
@@ -41,13 +41,32 @@ async def get_by_slug(db: AsyncSession, slug: str) -> Thread | None:
     return result.scalar_one_or_none()
 
 
-async def list_by_user(db: AsyncSession, user_id: uuid.UUID) -> list[Thread]:
-    """Return all active threads owned by the given user, newest first."""
-    result = await db.execute(
-        select(Thread)
-        .where(Thread.user_id == user_id, Thread.deleted_at.is_(None))
-        .order_by(Thread.updated_at.desc())
-    )
+async def list_by_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    cursor: tuple[datetime, uuid.UUID] | None = None,
+    limit: int = 20,
+) -> list[Thread]:
+    """Return active threads owned by the user, newest first, with keyset pagination.
+
+    Pass `cursor` (an `(updated_at, id)` pair) to fetch the page after that row.
+    The composite key keeps paging stable when several rows share an `updated_at`.
+    """
+    query = select(Thread).where(Thread.user_id == user_id, Thread.deleted_at.is_(None))
+
+    if cursor is not None:
+        cursor_updated_at, cursor_id = cursor
+        query = query.where(
+            or_(
+                Thread.updated_at < cursor_updated_at,
+                and_(Thread.updated_at == cursor_updated_at, Thread.id < cursor_id),
+            )
+        )
+
+    query = query.order_by(Thread.updated_at.desc(), Thread.id.desc()).limit(limit)
+
+    result = await db.execute(query)
 
     return list(result.scalars().all())
 

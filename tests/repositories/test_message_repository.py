@@ -117,15 +117,46 @@ async def test_list_by_thread_returns_empty_list_when_no_messages() -> None:
 
 async def test_list_by_thread_with_before_cursor_calls_execute() -> None:
     db = make_db()
-    cursor = datetime.now(timezone.utc)
+    cursor = (datetime.now(timezone.utc), uuid.uuid4())
 
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = []
     db.execute.return_value = mock_result
 
-    await message_repository.list_by_thread(db, thread_id=uuid.uuid4(), before=cursor)
+    await message_repository.list_by_thread(db, thread_id=uuid.uuid4(), cursor=cursor)
 
     db.execute.assert_awaited_once()
+
+
+async def test_list_by_thread_orders_by_created_at_then_id_for_stable_paging() -> None:
+    db = make_db()
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    db.execute.return_value = mock_result
+
+    await message_repository.list_by_thread(db, thread_id=uuid.uuid4())
+
+    compiled = str(db.execute.call_args[0][0])
+    # id is the tiebreaker so rows sharing a created_at keep a deterministic order.
+    assert "ORDER BY messages.created_at DESC, messages.id DESC" in compiled
+
+
+async def test_list_by_thread_cursor_uses_composite_created_at_and_id_predicate() -> None:
+    db = make_db()
+    cursor = (datetime.now(timezone.utc), uuid.uuid4())
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    db.execute.return_value = mock_result
+
+    await message_repository.list_by_thread(db, thread_id=uuid.uuid4(), cursor=cursor)
+
+    compiled = str(db.execute.call_args[0][0])
+    # Keyset predicate: created_at < cursor OR (created_at == cursor AND id < cursor_id).
+    assert "messages.created_at <" in compiled
+    assert "messages.created_at =" in compiled
+    assert "messages.id <" in compiled
 
 
 async def test_list_by_thread_respects_limit_parameter() -> None:

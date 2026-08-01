@@ -58,8 +58,10 @@ class SendMessageResponse(BaseModel):
 
 class ThreadListResponse(BaseModel):
     threads: list[ThreadSummary]
+    next_cursor: str | None = None
 
 
 class ThreadDetailResponse(BaseModel):
     thread: ThreadSummary
     messages: list[MessageOut]
+    next_cursor: str | None = None

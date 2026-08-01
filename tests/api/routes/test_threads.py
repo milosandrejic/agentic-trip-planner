@@ -7,6 +7,7 @@ import pytest
 from httpx import AsyncClient
 
 from trip_planner.agents.graph import PlannerOutcome
+from trip_planner.core.pagination import decode_cursor, encode_cursor
 from trip_planner.models.thread import ThreadStatus
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
@@ -544,6 +545,88 @@ async def test_list_threads_returns_empty_list_when_no_threads(db_client: AsyncC
     assert response.json()["threads"] == []
 
 
+async def test_list_threads_returns_next_cursor_when_page_is_full(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.list_by_user", new_callable=AsyncMock) as mock_list,
+    ):
+        mock_get_user.return_value = user
+        mock_list.return_value = [thread]
+
+        response = await db_client.get(
+            "/threads",
+            params={"limit": 1},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    next_cursor = response.json()["next_cursor"]
+    assert next_cursor is not None
+    assert decode_cursor(next_cursor) == (thread.updated_at, thread.id)
+
+
+async def test_list_threads_omits_next_cursor_when_page_not_full(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.list_by_user", new_callable=AsyncMock) as mock_list,
+    ):
+        mock_get_user.return_value = user
+        mock_list.return_value = [thread]
+
+        response = await db_client.get(
+            "/threads",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.json()["next_cursor"] is None
+
+
+async def test_list_threads_forwards_decoded_cursor_to_repository(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    cursor_at = datetime.now(timezone.utc)
+    cursor_id = uuid.uuid4()
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.list_by_user", new_callable=AsyncMock) as mock_list,
+    ):
+        mock_get_user.return_value = user
+        mock_list.return_value = []
+
+        await db_client.get(
+            "/threads",
+            params={"cursor": encode_cursor(cursor_at, cursor_id)},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert mock_list.call_args.kwargs["cursor"] == (cursor_at, cursor_id)
+
+
+async def test_list_threads_returns_400_for_invalid_cursor(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+
+    with patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user:
+        mock_get_user.return_value = user
+
+        response = await db_client.get(
+            "/threads",
+            params={"cursor": "not-a-valid-cursor!!!"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid pagination cursor"
+
+
 # --- GET /threads/{thread_id} ---
 
 
@@ -643,6 +726,79 @@ async def test_get_thread_passes_pagination_params_to_repository(db_client: Asyn
         )
 
     assert mock_list.call_args.kwargs["limit"] == 5
+
+
+async def test_get_thread_returns_next_cursor_when_page_is_full(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+    message = make_mock_message(thread.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(f"{_MESSAGE_REPO}.list_by_thread", new_callable=AsyncMock) as mock_list,
+    ):
+        mock_get_user.return_value = user
+        mock_get_thread.return_value = thread
+        mock_list.return_value = [message]
+
+        response = await db_client.get(
+            f"/threads/{thread.id}",
+            params={"limit": 1},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    next_cursor = response.json()["next_cursor"]
+    assert next_cursor is not None
+    assert decode_cursor(next_cursor) == (message.created_at, message.id)
+
+
+async def test_get_thread_forwards_decoded_cursor_to_repository(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+    cursor_at = datetime.now(timezone.utc)
+    cursor_id = uuid.uuid4()
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(f"{_MESSAGE_REPO}.list_by_thread", new_callable=AsyncMock) as mock_list,
+    ):
+        mock_get_user.return_value = user
+        mock_get_thread.return_value = thread
+        mock_list.return_value = []
+
+        await db_client.get(
+            f"/threads/{thread.id}",
+            params={"cursor": encode_cursor(cursor_at, cursor_id)},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert mock_list.call_args.kwargs["cursor"] == (cursor_at, cursor_id)
+
+
+async def test_get_thread_returns_400_for_invalid_cursor(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+
+    with (
+        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
+        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+    ):
+        mock_get_user.return_value = user
+        mock_get_thread.return_value = thread
+
+        response = await db_client.get(
+            f"/threads/{thread.id}",
+            params={"cursor": "not-a-valid-cursor!!!"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid pagination cursor"
 
 
 # --- DELETE /threads/{thread_id} ---
