@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     geoapify_api_key: str = ""
     google_places_api_key: str = ""
 
+    # Outbound HTTP (Phase 6) — timeouts in seconds, applied to every provider
+    http_connect_timeout: float = 5.0
+    http_read_timeout: float = 30.0
+    http_write_timeout: float = 10.0
+    http_pool_timeout: float = 5.0
+
     # Observability
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
