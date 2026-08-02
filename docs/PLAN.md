@@ -214,8 +214,8 @@
 - [x] `TripStatus` enum (Draft / Generating / Ready / Completed / Archived) with a guarded transition helper (reject illegal transitions) + tests
 
 ### 7.3 — Versioned itineraries
-- [ ] `ItineraryVersion` model (`id`, `trip_id` FK, `version_number`, `itinerary` JSONB, `created_at`) + `Trip.current_version_id` pointer; Alembic migration
-- [ ] `itinerary_version_repository` (`add_version` auto-incrementing per trip, `get_current`, `list_versions`, `set_current` for rollback) + tests
+- [x] `ItineraryVersion` model (`id`, `trip_id` FK, `version_number`, `itinerary` JSONB, `created_at`) + `Trip.current_version_id` pointer; Alembic migration
+- [x] `itinerary_version_repository` (`add_version` auto-incrementing per trip, `get_current`, `list_versions`, `set_current` for rollback) + tests
 
 ### 7.4 — Provider-independent `Place`
 - [ ] `Place` model (`id`, `provider`, `external_id`, `name`, `latitude`, `longitude`, `address`, `metadata` JSONB) with unique `(provider, external_id)`; Alembic migration

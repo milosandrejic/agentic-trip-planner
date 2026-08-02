@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from trip_planner.core.database import Base
 
 if TYPE_CHECKING:
+    from trip_planner.models.itinerary_version import ItineraryVersion
     from trip_planner.models.thread import Thread
 
 
@@ -34,6 +35,9 @@ class Trip(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     destination: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("itinerary_versions.id"), nullable=True
+    )
     status: Mapped[TripStatus] = mapped_column(
         SqlEnum(
             TripStatus,
@@ -58,4 +62,15 @@ class Trip(Base):
         "Thread",
         back_populates="trip",
         uselist=False,
+    )
+    versions: Mapped[list["ItineraryVersion"]] = relationship(
+        "ItineraryVersion",
+        back_populates="trip",
+        foreign_keys="ItineraryVersion.trip_id",
+    )
+    # post_update breaks the trips <-> itinerary_versions FK cycle at flush time.
+    current_version: Mapped["ItineraryVersion | None"] = relationship(
+        "ItineraryVersion",
+        foreign_keys=[current_version_id],
+        post_update=True,
     )
