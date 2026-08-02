@@ -202,13 +202,39 @@
 > - Remove `POST /trips/plan` or keep it only as a temporary thin alias until clients migrate, then delete it.
 > - Every MVP trip is a persistent, resumable conversation (survives refresh / return-next-day), so the stateful graph is the default.
 
-- [ ] Introduce `Trip` + `ItineraryVersion` — stop storing itinerary JSON only inside assistant messages; persist versioned itineraries (edit/version/rollback)
-- [ ] Trip lifecycle states: Draft / Generating / Ready / Completed / Archived (status column + transitions)
-- [ ] Provider-independent `Place` model (provider, external_id, coordinates, metadata) so activities aren't coupled to provider IDs
-- [ ] Persist Selected Flight / Selected Hotel separately from search results
-- [ ] Move thread orchestration into a dedicated application service (`TripPlanningService`) so routers no longer orchestrate graph execution and persistence
-- [ ] Persist assistant responses, itinerary versions and thread lifecycle atomically within the new Trip workflow
-- [ ] Tests: trip versioning/rollback, status transitions, place normalization, selection persistence, creation flow through `POST /trips`, continuation through `POST /threads/{thread_id}/messages`
+> **Sub-plan (execute top-to-bottom, one task per review gate). Cardinality: Trip 1—1 Thread for MVP.**
+> Current state: no `Trip` model — itinerary JSON is stored only on `messages.itinerary`; routers
+> orchestrate the graph + persistence directly; `POST /threads` creates, `POST /trips/plan` is stateless.
+
+### 7.1 — `Trip` model + schema foundation
+- [x] `Trip` model (`id`, `user_id` FK, `title`, `slug`, `destination` nullable, `status`, `deleted_at`, timestamps) + `trip_id` FK on `threads` (1—1, UNIQUE); Alembic migration
+- [x] `trip_repository` (`create_trip`, `get_by_id`, `list_by_user` keyset, `soft_delete`) + tests
+
+### 7.2 — Trip lifecycle
+- [x] `TripStatus` enum (Draft / Generating / Ready / Completed / Archived) with a guarded transition helper (reject illegal transitions) + tests
+
+### 7.3 — Versioned itineraries
+- [ ] `ItineraryVersion` model (`id`, `trip_id` FK, `version_number`, `itinerary` JSONB, `created_at`) + `Trip.current_version_id` pointer; Alembic migration
+- [ ] `itinerary_version_repository` (`add_version` auto-incrementing per trip, `get_current`, `list_versions`, `set_current` for rollback) + tests
+
+### 7.4 — Provider-independent `Place`
+- [ ] `Place` model (`id`, `provider`, `external_id`, `name`, `latitude`, `longitude`, `address`, `metadata` JSONB) with unique `(provider, external_id)`; Alembic migration
+- [ ] Normalization upsert (map provider activity result → `Place`, dedupe by `(provider, external_id)`) + tests
+
+### 7.5 — Persisted selections
+- [ ] `SelectedFlight` and `SelectedHotel` models persisting the chosen option snapshots separately from search results; Alembic migrations, repositories, and tests
+
+### 7.6 — Application service
+- [ ] `TripPlanningService` becomes the sole application entry point for planner orchestration (graph execution, persistence, and lifecycle transitions); routers stop orchestrating. Assistant response, itinerary version, and lifecycle transition commit atomically in one transaction (test rollback-on-failure) + service tests
+
+### 7.7 — Trip-centric API surface
+- [ ] `POST /trips` — sole creation entry point (Trip + Thread + first checkpoint + first assistant response) via `TripPlanningService` + route tests
+- [ ] `POST /threads/{thread_id}/messages` — continuation routes through the service (loads trip, resumes graph, persists new version + message atomically) + route tests
+- [ ] Remove `POST /threads` creation; remove `POST /trips/plan` (or keep as thin alias until clients migrate) + adjust affected tests
+
+### 7.8 — Integration tests
+- [ ] End-to-end: trip versioning/rollback, status transitions, place normalization, selection persistence, creation flow through `POST /trips`, continuation through `POST /threads/{thread_id}/messages`
+
 
 ## Wave 8 — Trip Validation Engine (future product)
 
