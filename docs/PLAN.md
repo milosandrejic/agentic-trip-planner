@@ -222,7 +222,7 @@
 - [x] Normalization upsert (map provider activity result → `Place`, dedupe by `(provider, external_id)`) + tests
 
 ### 7.5 — Persisted selections
-- [ ] `SelectedFlight` and `SelectedHotel` models persisting the chosen option snapshots separately from search results; Alembic migrations, repositories, and tests
+- [x] `SelectedFlight` and `SelectedHotel` models persisting the chosen option snapshots separately from search results; Alembic migrations, repositories, and tests
 
 ### 7.6 — Application service
 - [ ] `TripPlanningService` becomes the sole application entry point for planner orchestration (graph execution, persistence, and lifecycle transitions); routers stop orchestrating. Assistant response, itinerary version, and lifecycle transition commit atomically in one transaction (test rollback-on-failure) + service tests
