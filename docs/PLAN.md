@@ -225,7 +225,7 @@
 - [x] `SelectedFlight` and `SelectedHotel` models persisting the chosen option snapshots separately from search results; Alembic migrations, repositories, and tests
 
 ### 7.6 — Application service
-- [ ] `TripPlanningService` becomes the sole application entry point for planner orchestration (graph execution, persistence, and lifecycle transitions); routers stop orchestrating. Assistant response, itinerary version, and lifecycle transition commit atomically in one transaction (test rollback-on-failure) + service tests
+- [x] `TripPlanningService` becomes the sole application entry point for planner orchestration (graph execution, persistence, and lifecycle transitions); routers stop orchestrating. Assistant response, itinerary version, and lifecycle transition commit atomically in one transaction (test rollback-on-failure) + service tests
 
 ### 7.7 — Trip-centric API surface
 - [ ] `POST /trips` — sole creation entry point (Trip + Thread + first checkpoint + first assistant response) via `TripPlanningService` + route tests
