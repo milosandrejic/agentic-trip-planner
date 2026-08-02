@@ -155,6 +155,9 @@ class TripPlanningService:
 
         thread.status = ThreadStatus.READY
         await self._db.commit()
+        # Server-side onupdate expires updated_at on commit; reload so the caller can serialize
+        # the trip synchronously without triggering an illegal async lazy-load.
+        await self._db.refresh(trip)
 
     async def _restore_failed(
         self, trip: Trip, thread: Thread, previous_status: TripStatus

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://trip_planner:trip_planner@localhost:5433/trip_planner",
     )
+    test_database_url: str = Field(
+        default="postgresql+asyncpg://trip_planner:trip_planner@localhost:5433/trip_planner_test",
+    )
 
     # Auth (Phase 1)
     jwt_secret: str = "change-me-in-production"

@@ -233,7 +233,7 @@
 - [x] Remove `POST /threads` creation; remove `POST /trips/plan` (or keep as thin alias until clients migrate) + adjust affected tests
 
 ### 7.8 — Integration tests
-- [ ] End-to-end: trip versioning/rollback, status transitions, place normalization, selection persistence, creation flow through `POST /trips`, continuation through `POST /threads/{thread_id}/messages`
+- [x] End-to-end: trip versioning/rollback, status transitions, place normalization, selection persistence, creation flow through `POST /trips`, continuation through `POST /threads/{thread_id}/messages`
 
 
 ## Wave 8 — Trip Validation Engine (future product)
