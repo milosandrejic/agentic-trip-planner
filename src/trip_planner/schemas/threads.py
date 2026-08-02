@@ -9,10 +9,6 @@ from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Itinerary
 
 
-class CreateThreadRequest(BaseModel):
-    query: str = Field(min_length=10, max_length=1000)
-
-
 class SendMessageRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
 
@@ -45,11 +41,6 @@ class ClarificationResult(BaseModel):
 
 
 PlannerResult = Annotated[ItineraryResult | ClarificationResult, Field(discriminator="type")]
-
-
-class CreateThreadResponse(BaseModel):
-    thread: ThreadSummary
-    result: PlannerResult
 
 
 class SendMessageResponse(BaseModel):

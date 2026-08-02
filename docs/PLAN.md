@@ -228,9 +228,9 @@
 - [x] `TripPlanningService` becomes the sole application entry point for planner orchestration (graph execution, persistence, and lifecycle transitions); routers stop orchestrating. Assistant response, itinerary version, and lifecycle transition commit atomically in one transaction (test rollback-on-failure) + service tests
 
 ### 7.7 — Trip-centric API surface
-- [ ] `POST /trips` — sole creation entry point (Trip + Thread + first checkpoint + first assistant response) via `TripPlanningService` + route tests
-- [ ] `POST /threads/{thread_id}/messages` — continuation routes through the service (loads trip, resumes graph, persists new version + message atomically) + route tests
-- [ ] Remove `POST /threads` creation; remove `POST /trips/plan` (or keep as thin alias until clients migrate) + adjust affected tests
+- [x] `POST /trips` — sole creation entry point (Trip + Thread + first checkpoint + first assistant response) via `TripPlanningService` + route tests
+- [x] `POST /threads/{thread_id}/messages` — continuation routes through the service (loads trip, resumes graph, persists new version + message atomically) + route tests
+- [x] Remove `POST /threads` creation; remove `POST /trips/plan` (or keep as thin alias until clients migrate) + adjust affected tests
 
 ### 7.8 — Integration tests
 - [ ] End-to-end: trip versioning/rollback, status transitions, place normalization, selection persistence, creation flow through `POST /trips`, continuation through `POST /threads/{thread_id}/messages`

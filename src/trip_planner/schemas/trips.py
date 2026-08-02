@@ -1,10 +1,6 @@
 from pydantic import BaseModel, Field
 
 
-class TripPlanRequest(BaseModel):
-    query: str = Field(min_length=10, max_length=1000)
-
-
 class Source(BaseModel):
     title: str
     url: str
@@ -79,7 +75,3 @@ class Itinerary(BaseModel):
         description="Top hotel options found for this trip.",
     )
     sources: list[Source] = Field(default_factory=lambda: [])
-
-
-class TripPlanResponse(BaseModel):
-    itinerary: Itinerary

@@ -43,10 +43,11 @@ class TripPlanningService:
     atomically. Routers call this service instead of touching the graph or repositories directly.
     """
 
-    def __init__(self, db: AsyncSession, planner: PlannerCallable = plan_turn) -> None:
+    def __init__(self, db: AsyncSession, planner: PlannerCallable | None = None) -> None:
         """Store the session and the planning callable (defaults to the real graph run)."""
         self._db = db
-        self._planner = planner
+        # Resolved at construction so route tests can patch the module-level plan_turn.
+        self._planner = planner or plan_turn
 
     async def start_trip(self, user: User, query: str) -> TripTurnResult:
         """Create a trip and its thread, run the first turn, and return the result.

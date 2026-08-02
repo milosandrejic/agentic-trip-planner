@@ -1,6 +1,8 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 import uuid
+from contextlib import ExitStack
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +11,7 @@ from httpx import AsyncClient
 from trip_planner.agents.graph import PlannerOutcome
 from trip_planner.core.pagination import decode_cursor, encode_cursor
 from trip_planner.models.thread import ThreadStatus
+from trip_planner.models.trip import TripStatus
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
 from trip_planner.services.auth_service import create_access_token
@@ -16,7 +19,10 @@ from trip_planner.services.auth_service import create_access_token
 _DEPS_GET_USER = "trip_planner.api.dependencies.user_repository.get_user_by_id"
 _THREAD_REPO = "trip_planner.api.routes.threads.thread_repository"
 _MESSAGE_REPO = "trip_planner.api.routes.threads.message_repository"
-_PLAN_TURN = "trip_planner.api.routes.threads.plan_turn"
+_SVC_PLANNER = "trip_planner.services.trip_planning_service.plan_turn"
+_SVC_TRIP_REPO = "trip_planner.repositories.trip_repository"
+_SVC_MESSAGE_REPO = "trip_planner.repositories.message_repository"
+_SVC_VERSION_REPO = "trip_planner.repositories.itinerary_version_repository"
 
 
 def make_mock_user(user_id: uuid.UUID | None = None) -> MagicMock:
@@ -38,8 +44,7 @@ def make_itinerary(destination: str = "Paris") -> Itinerary:
 
 
 def make_plan_result(itinerary: Itinerary | None = None) -> PlannerOutcome:
-    resolved = itinerary or make_itinerary()
-    return PlannerOutcome(itinerary=resolved)
+    return PlannerOutcome(itinerary=itinerary or make_itinerary())
 
 
 def make_clarification_result(message: str = "Could you tell me where and how long?") -> PlannerOutcome:
@@ -54,12 +59,20 @@ def make_mock_thread(user_id: uuid.UUID) -> MagicMock:
     thread = MagicMock()
     thread.id = uuid.uuid4()
     thread.user_id = user_id
+    thread.trip_id = uuid.uuid4()
     thread.title = "Trip to Paris"
     thread.slug = "trip-to-paris-abc12345"
     thread.status = ThreadStatus.READY
     thread.created_at = datetime.now(timezone.utc)
     thread.updated_at = datetime.now(timezone.utc)
     return thread
+
+
+def make_mock_trip(status: TripStatus = TripStatus.READY) -> MagicMock:
+    trip = MagicMock()
+    trip.id = uuid.uuid4()
+    trip.status = status
+    return trip
 
 
 def make_mock_message(
@@ -75,235 +88,16 @@ def make_mock_message(
     return message
 
 
-# --- POST /threads ---
+def patch_send_service(stack: ExitStack, *, trip: MagicMock) -> SimpleNamespace:
+    """Patch the repository calls the service makes on a continuation turn."""
+    create_message = AsyncMock()
+    add_version = AsyncMock()
+    stack.enter_context(patch(f"{_SVC_TRIP_REPO}.get_by_id", AsyncMock(return_value=trip)))
+    stack.enter_context(patch(f"{_SVC_MESSAGE_REPO}.create_message", create_message))
+    stack.enter_context(patch(f"{_SVC_VERSION_REPO}.add_version", add_version))
+    stack.enter_context(patch(f"{_SVC_VERSION_REPO}.set_current", AsyncMock()))
 
-
-async def test_create_thread_returns_201_with_thread_and_itinerary(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    itinerary = make_itinerary("Paris")
-    result = make_plan_result(itinerary)
-    thread = make_mock_thread(user.id)
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        response = await db_client.post(
-            "/threads",
-            json={"query": "Plan a 7-day Paris trip for 2 people"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["thread"]["title"] == thread.title
-    assert body["thread"]["slug"] == thread.slug
-    assert body["result"]["type"] == "itinerary"
-    assert body["result"]["itinerary"]["destination"] == "Paris"
-    assert body["result"]["itinerary"]["total_days"] == 1
-
-
-async def test_create_thread_passes_query_to_planner(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    query = "Plan a 7-day Paris trip for 2 people"
-    result = make_plan_result()
-    thread = make_mock_thread(user.id)
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        await db_client.post(
-            "/threads",
-            json={"query": query},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    called_query: str = mock_planner.call_args[0][0]
-    called_thread_id: str = mock_planner.call_args[1]["thread_id"]
-    assert called_query == query
-    assert called_thread_id == str(thread.id)
-
-
-async def test_create_thread_persists_human_and_assistant_messages(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    itinerary = make_itinerary("Paris")
-    result = make_plan_result(itinerary)
-    thread = make_mock_thread(user.id)
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock) as mock_create_message,
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        await db_client.post(
-            "/threads",
-            json={"query": "Plan a 7-day Paris trip for 2 people"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert mock_create_message.call_count == 2
-    human_call = mock_create_message.call_args_list[0]
-    assistant_call = mock_create_message.call_args_list[1]
-    assert human_call.kwargs["role"] == "human"
-    assert assistant_call.kwargs["role"] == "assistant"
-    assert assistant_call.kwargs["content"] == itinerary.summary
-
-
-async def test_create_thread_commits_request_before_running_ai(
-    db_client: AsyncClient, mock_db_session: AsyncMock
-) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    result = make_plan_result()
-    thread = make_mock_thread(user.id)
-    commits_before_ai: dict[str, int] = {}
-
-    async def capture_commit_count(*_args: object, **_kwargs: object) -> PlannerOutcome:
-        commits_before_ai["count"] = mock_db_session.commit.await_count
-        return result
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.side_effect = capture_commit_count
-
-        response = await db_client.post(
-            "/threads",
-            json={"query": "Plan a 7-day Paris trip for 2 people"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 201
-    assert commits_before_ai["count"] == 1
-    assert mock_db_session.commit.await_count == 2
-
-
-async def test_create_thread_returns_500_when_graph_returns_no_itinerary(
-    db_client: AsyncClient,
-) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    thread = make_mock_thread(user.id)
-    empty_result = PlannerOutcome()
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = empty_result
-
-        response = await db_client.post(
-            "/threads",
-            json={"query": "Plan a 7-day Paris trip for 2 people"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 500
-    assert response.json()["detail"] == "Graph did not produce a structured itinerary or clarification"
-
-
-async def test_create_thread_marks_thread_ready_on_success(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    result = make_plan_result()
-    thread = make_mock_thread(user.id)
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        await db_client.post(
-            "/threads",
-            json={"query": "Plan a 7-day Paris trip for 2 people"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert thread.status == ThreadStatus.READY
-
-
-async def test_create_thread_marks_thread_failed_when_planner_raises(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    thread = make_mock_thread(user.id)
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.side_effect = TimeoutError("planner exceeded the time limit")
-
-        with pytest.raises(TimeoutError):
-            await db_client.post(
-                "/threads",
-                json={"query": "Plan a 7-day Paris trip for 2 people"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-    assert thread.status == ThreadStatus.FAILED
-
-
-async def test_create_thread_returns_401_without_token(db_client: AsyncClient) -> None:
-    response = await db_client.post(
-        "/threads",
-        json={"query": "Plan a 7-day Paris trip for 2 people"},
-    )
-
-    assert response.status_code == 401
-
-
-async def test_create_thread_returns_422_for_query_too_short(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-
-    with patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user:
-        mock_get_user.return_value = user
-
-        response = await db_client.post(
-            "/threads",
-            json={"query": "Paris"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 422
+    return SimpleNamespace(create_message=create_message, add_version=add_version)
 
 
 # --- POST /threads/{thread_id}/messages ---
@@ -312,19 +106,14 @@ async def test_create_thread_returns_422_for_query_too_short(db_client: AsyncCli
 async def test_send_message_returns_200_with_itinerary(db_client: AsyncClient) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
-    itinerary = make_itinerary("Tokyo")
-    result = make_plan_result(itinerary)
     thread = make_mock_thread(user.id)
+    itinerary = make_itinerary("Tokyo")
 
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = thread
-        mock_planner.return_value = result
+    with ExitStack() as stack:
+        stack.enter_context(patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)))
+        stack.enter_context(patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)))
+        patch_send_service(stack, trip=make_mock_trip())
+        stack.enter_context(patch(_SVC_PLANNER, new=AsyncMock(return_value=make_plan_result(itinerary))))
 
         response = await db_client.post(
             f"/threads/{thread.id}/messages",
@@ -337,22 +126,38 @@ async def test_send_message_returns_200_with_itinerary(db_client: AsyncClient) -
     assert response.json()["result"]["itinerary"]["destination"] == "Tokyo"
 
 
+async def test_send_message_persists_itinerary_version(db_client: AsyncClient) -> None:
+    user = make_mock_user()
+    token = create_access_token(str(user.id))
+    thread = make_mock_thread(user.id)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)))
+        stack.enter_context(patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)))
+        deps = patch_send_service(stack, trip=make_mock_trip())
+        stack.enter_context(patch(_SVC_PLANNER, new=AsyncMock(return_value=make_plan_result())))
+
+        await db_client.post(
+            f"/threads/{thread.id}/messages",
+            json={"query": "Add a day trip to Mount Fuji"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    deps.add_version.assert_awaited_once()
+
+
 async def test_send_message_passes_query_to_planner(db_client: AsyncClient) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
-    query = "Add a day trip to Mount Fuji"
-    result = make_plan_result()
     thread = make_mock_thread(user.id)
+    query = "Add a day trip to Mount Fuji"
 
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = thread
-        mock_planner.return_value = result
+    with ExitStack() as stack:
+        stack.enter_context(patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)))
+        stack.enter_context(patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)))
+        patch_send_service(stack, trip=make_mock_trip())
+        planner = AsyncMock(return_value=make_plan_result())
+        stack.enter_context(patch(_SVC_PLANNER, new=planner))
 
         await db_client.post(
             f"/threads/{thread.id}/messages",
@@ -360,44 +165,34 @@ async def test_send_message_passes_query_to_planner(db_client: AsyncClient) -> N
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    called_query: str = mock_planner.call_args[0][0]
-    called_thread_id: str = mock_planner.call_args[1]["thread_id"]
-    assert called_query == query
-    assert called_thread_id == str(thread.id)
+    assert planner.call_args[0][0] == query
+    assert planner.call_args[0][1] == str(thread.id)
 
 
-async def test_send_message_commits_request_before_running_ai(
-    db_client: AsyncClient, mock_db_session: AsyncMock
-) -> None:
+async def test_send_message_returns_200_with_clarification(db_client: AsyncClient) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
-    result = make_plan_result()
     thread = make_mock_thread(user.id)
-    commits_before_ai: dict[str, int] = {}
+    result = make_clarification_result()
 
-    async def capture_commit_count(*_args: object, **_kwargs: object) -> PlannerOutcome:
-        commits_before_ai["count"] = mock_db_session.commit.await_count
-        return result
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = thread
-        mock_planner.side_effect = capture_commit_count
+    with ExitStack() as stack:
+        stack.enter_context(patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)))
+        stack.enter_context(patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)))
+        patch_send_service(stack, trip=make_mock_trip())
+        stack.enter_context(patch(_SVC_PLANNER, new=AsyncMock(return_value=result)))
 
         response = await db_client.post(
             f"/threads/{thread.id}/messages",
-            json={"query": "Add a day trip to Mount Fuji"},
+            json={"query": "somewhere warm"},
             headers={"Authorization": f"Bearer {token}"},
         )
 
     assert response.status_code == 200
-    assert commits_before_ai["count"] == 1
-    assert mock_db_session.commit.await_count == 2
+    body = response.json()
+    assert body["result"]["type"] == "clarification"
+    expected_clarification = result.clarification
+    assert expected_clarification is not None
+    assert body["result"]["clarification"]["message"] == expected_clarification.message
 
 
 async def test_send_message_returns_404_when_thread_not_found(db_client: AsyncClient) -> None:
@@ -406,12 +201,9 @@ async def test_send_message_returns_404_when_thread_not_found(db_client: AsyncCl
     missing_thread_id = uuid.uuid4()
 
     with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)),
+        patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=None)),
     ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = None
-
         response = await db_client.post(
             f"/threads/{missing_thread_id}/messages",
             json={"query": "Add a day trip to Mount Fuji"},
@@ -430,12 +222,9 @@ async def test_send_message_returns_403_for_cross_user_access(db_client: AsyncCl
     thread = make_mock_thread(owner.id)
 
     with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
+        patch(_DEPS_GET_USER, new=AsyncMock(return_value=requester)),
+        patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)),
     ):
-        mock_get_user.return_value = requester
-        mock_get_thread.return_value = thread
-
         response = await db_client.post(
             f"/threads/{thread.id}/messages",
             json={"query": "Add a day trip to Mount Fuji"},
@@ -446,22 +235,18 @@ async def test_send_message_returns_403_for_cross_user_access(db_client: AsyncCl
     assert response.json()["detail"] == "Access denied"
 
 
-async def test_send_message_returns_500_when_graph_returns_no_itinerary(
+async def test_send_message_returns_500_when_graph_returns_no_result(
     db_client: AsyncClient,
 ) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
     thread = make_mock_thread(user.id)
-    empty_result = PlannerOutcome()
 
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-    ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = thread
-        mock_planner.return_value = empty_result
+    with ExitStack() as stack:
+        stack.enter_context(patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)))
+        stack.enter_context(patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)))
+        patch_send_service(stack, trip=make_mock_trip())
+        stack.enter_context(patch(_SVC_PLANNER, new=AsyncMock(return_value=PlannerOutcome())))
 
         response = await db_client.post(
             f"/threads/{thread.id}/messages",
@@ -473,20 +258,18 @@ async def test_send_message_returns_500_when_graph_returns_no_itinerary(
     assert response.json()["detail"] == "Graph did not produce a structured itinerary or clarification"
 
 
-async def test_send_message_marks_thread_failed_when_planner_raises(db_client: AsyncClient) -> None:
+async def test_send_message_propagates_planner_error(db_client: AsyncClient) -> None:
     user = make_mock_user()
     token = create_access_token(str(user.id))
     thread = make_mock_thread(user.id)
 
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = thread
-        mock_planner.side_effect = TimeoutError("planner exceeded the time limit")
+    with ExitStack() as stack:
+        stack.enter_context(patch(_DEPS_GET_USER, new=AsyncMock(return_value=user)))
+        stack.enter_context(patch(f"{_THREAD_REPO}.get_by_id", new=AsyncMock(return_value=thread)))
+        patch_send_service(stack, trip=make_mock_trip())
+        stack.enter_context(
+            patch(_SVC_PLANNER, new=AsyncMock(side_effect=TimeoutError("planner exceeded the time limit")))
+        )
 
         with pytest.raises(TimeoutError):
             await db_client.post(
@@ -495,7 +278,14 @@ async def test_send_message_marks_thread_failed_when_planner_raises(db_client: A
                 headers={"Authorization": f"Bearer {token}"},
             )
 
-    assert thread.status == ThreadStatus.FAILED
+
+async def test_send_message_returns_401_without_token(db_client: AsyncClient) -> None:
+    response = await db_client.post(
+        f"/threads/{uuid.uuid4()}/messages",
+        json={"query": "Add a day trip to Mount Fuji"},
+    )
+
+    assert response.status_code == 401
 
 
 # --- GET /threads ---
@@ -872,130 +662,3 @@ async def test_delete_thread_returns_403_for_cross_user_access(db_client: AsyncC
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Access denied"
-
-
-# --- Clarification responses ---
-
-
-async def test_create_thread_returns_201_with_clarification_when_request_is_vague(
-    db_client: AsyncClient,
-) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    thread = make_mock_thread(user.id)
-    result = make_clarification_result()
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        response = await db_client.post(
-            "/threads",
-            json={"query": "Plan me a trip please help"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["result"]["type"] == "clarification"
-    expected_clarification = result.clarification
-    assert expected_clarification is not None
-    assert body["result"]["clarification"]["message"] == expected_clarification.message
-    assert "destination" in body["result"]["clarification"]["missing_fields"]
-
-
-async def test_create_thread_persists_clarification_as_assistant_message(
-    db_client: AsyncClient,
-) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    thread = make_mock_thread(user.id)
-    clarification_message = "Could you tell me where and how long?"
-    result = make_clarification_result(clarification_message)
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock) as mock_create_message,
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        await db_client.post(
-            "/threads",
-            json={"query": "Plan me a trip please help"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert mock_create_message.call_count == 2
-    human_call = mock_create_message.call_args_list[0]
-    assistant_call = mock_create_message.call_args_list[1]
-    assert human_call.kwargs["role"] == "human"
-    assert assistant_call.kwargs["role"] == "assistant"
-    assert assistant_call.kwargs["content"] == clarification_message
-
-
-async def test_create_thread_marks_thread_ready_on_clarification(db_client: AsyncClient) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    thread = make_mock_thread(user.id)
-    thread.status = ThreadStatus.PENDING
-    result = make_clarification_result()
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.create_thread", new_callable=AsyncMock) as mock_create_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_create_thread.return_value = thread
-        mock_planner.return_value = result
-
-        await db_client.post(
-            "/threads",
-            json={"query": "Plan me a trip please help"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert thread.status == ThreadStatus.READY
-
-
-async def test_send_message_returns_200_with_clarification_on_vague_follow_up(
-    db_client: AsyncClient,
-) -> None:
-    user = make_mock_user()
-    token = create_access_token(str(user.id))
-    thread = make_mock_thread(user.id)
-    result = make_clarification_result()
-
-    with (
-        patch(_DEPS_GET_USER, new_callable=AsyncMock) as mock_get_user,
-        patch(f"{_THREAD_REPO}.get_by_id", new_callable=AsyncMock) as mock_get_thread,
-        patch(_PLAN_TURN, new_callable=AsyncMock) as mock_planner,
-        patch(f"{_MESSAGE_REPO}.create_message", new_callable=AsyncMock),
-    ):
-        mock_get_user.return_value = user
-        mock_get_thread.return_value = thread
-        mock_planner.return_value = result
-
-        response = await db_client.post(
-            f"/threads/{thread.id}/messages",
-            json={"query": "somewhere warm"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["result"]["type"] == "clarification"
-    expected_clarification = result.clarification
-    assert expected_clarification is not None
-    assert body["result"]["clarification"]["message"] == expected_clarification.message
