@@ -218,8 +218,8 @@
 - [x] `itinerary_version_repository` (`add_version` auto-incrementing per trip, `get_current`, `list_versions`, `set_current` for rollback) + tests
 
 ### 7.4 — Provider-independent `Place`
-- [ ] `Place` model (`id`, `provider`, `external_id`, `name`, `latitude`, `longitude`, `address`, `metadata` JSONB) with unique `(provider, external_id)`; Alembic migration
-- [ ] Normalization upsert (map provider activity result → `Place`, dedupe by `(provider, external_id)`) + tests
+- [x] `Place` model (`id`, `provider`, `external_id`, `name`, `latitude`, `longitude`, `address`, `metadata` JSONB) with unique `(provider, external_id)`; Alembic migration
+- [x] Normalization upsert (map provider activity result → `Place`, dedupe by `(provider, external_id)`) + tests
 
 ### 7.5 — Persisted selections
 - [ ] `SelectedFlight` and `SelectedHotel` models persisting the chosen option snapshots separately from search results; Alembic migrations, repositories, and tests
