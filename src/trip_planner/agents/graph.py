@@ -14,7 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field, SecretStr
 
-from trip_planner.agents.state import TripPlannerState
+from trip_planner.agents.state import TripPlannerState, UpdateScope
 from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import FlightOption, Itinerary
@@ -57,7 +57,11 @@ _TRIAGE_PROMPT_TEMPLATE = (
     "When you clarify, provide a friendly, conversational message and list the missing fields by "
     "their machine-readable names (e.g. 'destination', 'travel_dates', 'duration', 'budget', "
     "'traveler_count'). "
-    "Otherwise set should_clarify=false and leave clarification as null."
+    "Otherwise set should_clarify=false and leave clarification as null. "
+    "For an itinerary_modification, also set update_scope to the narrowest section the user wants "
+    "changed: 'flights' when only flights change, 'hotels' when only hotels change, 'itinerary' when "
+    "only the day-by-day plan (days or activities) changes. Use 'full' for a brand-new trip or a "
+    "change that touches several sections at once. For every other intent, leave update_scope as 'full'."
 )
 
 _SYSTEM_PROMPT_TEMPLATE = (
@@ -151,6 +155,13 @@ class _TriageDecision(BaseModel):
         default=None,
         description="Required when should_clarify is True. Must be null otherwise.",
     )
+    update_scope: UpdateScope = Field(
+        default=UpdateScope.FULL,
+        description=(
+            "For an itinerary_modification, the narrowest section to change: 'flights', 'hotels', "
+            "or 'itinerary' (day-by-day plan). 'full' for a new trip or a broad, multi-section change."
+        ),
+    )
 
 
 _llm_triage = _triage_llm.with_structured_output(_TriageDecision)
@@ -197,14 +208,21 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
     should_clarify = decision.should_clarify and not has_itinerary
     clarification = decision.clarification if should_clarify else None
 
+    # A scoped follow-up only applies when modifying an existing itinerary; otherwise regenerate fully.
+    is_modification = decision.intent is _TriageIntent.ITINERARY_MODIFICATION
+    update_scope = decision.update_scope if has_itinerary and is_modification else UpdateScope.FULL
+
     # Reset transient outputs so a resumed thread never reads a previous turn's itinerary
-    # or tool results (this graph is checkpointed and re-entered on follow-up messages).
+    # or tool results (this graph is checkpointed and re-entered on follow-up messages). The
+    # previous itinerary is carried forward so the formatter can splice a scoped change into it.
     return TripPlannerState(
         messages=[],
         trip_request=state["trip_request"],
         tool_call_count=0,
         tool_results=[],
         current_itinerary=None,
+        previous_itinerary=state.get("current_itinerary"),
+        update_scope=update_scope,
         pending_clarification=clarification,
     )
 
@@ -337,6 +355,28 @@ async def _format_complete_itinerary(messages: list[BaseMessage]) -> Itinerary:
     return itinerary
 
 
+def _merge_itinerary(
+    previous: Itinerary | None, new: Itinerary, scope: UpdateScope
+) -> Itinerary:
+    """Splice a scoped follow-up change into the previous itinerary.
+
+    A follow-up that only touches flights, hotels, or the day plan must leave the other sections
+    exactly as they were, instead of regenerating (and silently changing) the whole trip. Empty
+    new sections fall back to the previous ones so a failed re-search never wipes existing data.
+    """
+    if previous is None or scope is UpdateScope.FULL:
+        return new
+
+    if scope is UpdateScope.FLIGHTS:
+        return previous.model_copy(update={"flights": new.flights or previous.flights})
+
+    if scope is UpdateScope.HOTELS:
+        return previous.model_copy(update={"hotels": new.hotels or previous.hotels})
+
+    # UpdateScope.ITINERARY: take the new day-by-day plan but keep the chosen flights and hotels.
+    return new.model_copy(update={"flights": previous.flights, "hotels": previous.hotels})
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Force the conversation into a structured Itinerary via with_structured_output."""
     format_instruction = SystemMessage(content=_FORMAT_PROMPT)
@@ -346,6 +386,9 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
 
     itinerary = await _format_complete_itinerary(messages_with_instruction)
     itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
+
+    scope = state.get("update_scope", UpdateScope.FULL)
+    itinerary = _merge_itinerary(state.get("previous_itinerary"), itinerary, scope)
 
     return TripPlannerState(
         messages=[],

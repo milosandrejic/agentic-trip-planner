@@ -9,6 +9,7 @@ import trip_planner.agents.graph as graph_module
 from trip_planner.agents.graph import (
     PlannerOutcome,
     _dedupe_flights,
+    _merge_itinerary,
     _route_after_reason,
     _route_after_triage,
     format_node,
@@ -18,9 +19,9 @@ from trip_planner.agents.graph import (
     run_planner,
     triage_node,
 )
-from trip_planner.agents.state import TripPlannerState
+from trip_planner.agents.state import TripPlannerState, UpdateScope
 from trip_planner.schemas.clarification import ClarificationRequest
-from trip_planner.schemas.trips import Activity, DayPlan, FlightOption, Itinerary
+from trip_planner.schemas.trips import Activity, DayPlan, FlightOption, HotelOption, Itinerary
 from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
 
 
@@ -63,6 +64,10 @@ def _make_flight(airline: str = "British Airways", price: float = 250.00) -> Fli
         outbound_date="2026-08-01",
         return_date="2026-08-08",
     )
+
+
+def _make_hotel(name: str = "Hotel Le Marais") -> HotelOption:
+    return HotelOption(name=name, nightly_price=95.00, currency="EUR")
 
 
 # --- _route_after_agent ---
@@ -308,6 +313,94 @@ async def test_format_node_keeps_fullest_itinerary_after_max_attempts() -> None:
     assert mock_llm.ainvoke.await_count == 3
 
 
+async def test_format_node_hotels_scope_keeps_previous_days_and_flights() -> None:
+    previous = _make_multi_day_itinerary(3, 3).model_copy(
+        update={"flights": [_make_flight()], "hotels": [_make_hotel("Old Hotel")]}
+    )
+    regenerated = _make_multi_day_itinerary(1, 3).model_copy(
+        update={"flights": [], "hotels": [_make_hotel("New Hotel")]}
+    )
+    state = _make_state([AIMessage(content="Swapped the hotel.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.HOTELS
+
+    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=regenerated)
+        result = await format_node(state)
+
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert len(itinerary.days) == 3
+    assert [hotel.name for hotel in itinerary.hotels] == ["New Hotel"]
+    assert [flight.airline for flight in itinerary.flights] == ["British Airways"]
+
+
+# --- _merge_itinerary ---
+
+
+def _with_sections(base: Itinerary, flights: list[FlightOption], hotels: list[HotelOption]) -> Itinerary:
+    return base.model_copy(update={"flights": flights, "hotels": hotels})
+
+
+def test_merge_itinerary_full_scope_replaces_everything() -> None:
+    previous = _with_sections(_make_itinerary(), [_make_flight()], [_make_hotel("Old")])
+    new = _with_sections(_make_multi_day_itinerary(2, 2), [], [_make_hotel("New")])
+
+    merged = _merge_itinerary(previous, new, UpdateScope.FULL)
+
+    assert merged is new
+
+
+def test_merge_itinerary_none_previous_returns_new() -> None:
+    new = _make_itinerary()
+
+    merged = _merge_itinerary(None, new, UpdateScope.HOTELS)
+
+    assert merged is new
+
+
+def test_merge_itinerary_hotels_scope_keeps_previous_days_and_flights() -> None:
+    previous = _with_sections(_make_multi_day_itinerary(3, 3), [_make_flight()], [_make_hotel("Old")])
+    new = _with_sections(_make_multi_day_itinerary(1, 3), [], [_make_hotel("New")])
+
+    merged = _merge_itinerary(previous, new, UpdateScope.HOTELS)
+
+    assert len(merged.days) == 3
+    assert [hotel.name for hotel in merged.hotels] == ["New"]
+    assert [flight.airline for flight in merged.flights] == ["British Airways"]
+
+
+def test_merge_itinerary_flights_scope_keeps_previous_days_and_hotels() -> None:
+    previous = _with_sections(_make_multi_day_itinerary(3, 3), [_make_flight("Old Air")], [_make_hotel("Stay")])
+    new = _with_sections(_make_multi_day_itinerary(1, 3), [_make_flight("New Air")], [])
+
+    merged = _merge_itinerary(previous, new, UpdateScope.FLIGHTS)
+
+    assert len(merged.days) == 3
+    assert [flight.airline for flight in merged.flights] == ["New Air"]
+    assert [hotel.name for hotel in merged.hotels] == ["Stay"]
+
+
+def test_merge_itinerary_itinerary_scope_keeps_previous_flights_and_hotels() -> None:
+    previous = _with_sections(_make_multi_day_itinerary(3, 3), [_make_flight()], [_make_hotel("Stay")])
+    new = _with_sections(_make_multi_day_itinerary(3, 3), [], [])
+
+    merged = _merge_itinerary(previous, new, UpdateScope.ITINERARY)
+
+    assert merged.days is new.days
+    assert [flight.airline for flight in merged.flights] == ["British Airways"]
+    assert [hotel.name for hotel in merged.hotels] == ["Stay"]
+
+
+def test_merge_itinerary_empty_new_section_falls_back_to_previous() -> None:
+    previous = _with_sections(_make_itinerary(), [_make_flight()], [_make_hotel("Stay")])
+    new = _with_sections(_make_itinerary(), [], [])
+
+    merged = _merge_itinerary(previous, new, UpdateScope.HOTELS)
+
+    assert [hotel.name for hotel in merged.hotels] == ["Stay"]
+
+
 # --- _route_after_triage ---
 
 
@@ -450,6 +543,75 @@ async def test_triage_node_lets_modifications_proceed_without_clarifying() -> No
 
     assert result.get("pending_clarification") is None
     assert _route_after_triage(result) == "reason"
+
+
+async def test_triage_node_carries_scope_and_previous_itinerary_for_modifications() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    previous = _make_itinerary()
+    decision = _TriageDecision(
+        intent=_TriageIntent.ITINERARY_MODIFICATION,
+        should_clarify=False,
+        clarification=None,
+        update_scope=UpdateScope.HOTELS,
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="find me cheaper hotels")],
+        trip_request="find me cheaper hotels",
+        current_itinerary=previous,
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("update_scope") is UpdateScope.HOTELS
+    assert result.get("previous_itinerary") is previous
+    assert result.get("current_itinerary") is None
+
+
+async def test_triage_node_forces_full_scope_for_new_trips() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    decision = _TriageDecision(
+        intent=_TriageIntent.NEW_TRIP,
+        should_clarify=False,
+        clarification=None,
+        update_scope=UpdateScope.HOTELS,
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days")],
+        trip_request="Paris 7 days",
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("update_scope") is UpdateScope.FULL
+    assert result.get("previous_itinerary") is None
+
+
+async def test_triage_node_ignores_scope_without_existing_itinerary() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    # The model may mislabel a first turn as a modification; without an itinerary, force full.
+    decision = _TriageDecision(
+        intent=_TriageIntent.ITINERARY_MODIFICATION,
+        should_clarify=False,
+        clarification=None,
+        update_scope=UpdateScope.FLIGHTS,
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="Paris 7 days")],
+        trip_request="Paris 7 days",
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("update_scope") is UpdateScope.FULL
 
 
 async def test_triage_node_lets_clarification_answers_proceed_without_reclarifying() -> None:
