@@ -278,7 +278,7 @@ def _dedupe_flights(flights: list[FlightOption]) -> list[FlightOption]:
     Providers and the LLM occasionally emit the same offer twice; the frontend must never receive
     duplicates. Two offers are identical when airline, dates, duration, and price all match.
     """
-    seen: set[tuple[str, str, str | None, int | None, str, str]] = set()
+    seen: set[tuple[str, str, str | None, int | None, float | None, str | None]] = set()
     unique: list[FlightOption] = []
 
     for flight in flights:

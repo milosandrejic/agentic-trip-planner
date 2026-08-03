@@ -37,7 +37,7 @@ def _make_itinerary() -> Itinerary:
     return Itinerary(destination="Paris", total_days=1, summary="A great trip.", days=[day])
 
 
-def _make_flight(airline: str = "British Airways", price: str = "250.00") -> FlightOption:
+def _make_flight(airline: str = "British Airways", price: float = 250.00) -> FlightOption:
     return FlightOption(
         airline=airline,
         stops=0,
@@ -219,7 +219,7 @@ async def test_format_node_feeds_structured_tool_results_to_llm() -> None:
 def test_dedupe_flights_removes_identical_offers_preserving_order() -> None:
     first = _make_flight()
     duplicate = _make_flight()
-    other = _make_flight(airline="Ryanair", price="90.00")
+    other = _make_flight(airline="Ryanair", price=90.00)
 
     result = _dedupe_flights([first, duplicate, other])
 
@@ -227,8 +227,8 @@ def test_dedupe_flights_removes_identical_offers_preserving_order() -> None:
 
 
 def test_dedupe_flights_keeps_offers_differing_by_price() -> None:
-    cheap = _make_flight(price="90.00")
-    pricey = _make_flight(price="250.00")
+    cheap = _make_flight(price=90.00)
+    pricey = _make_flight(price=250.00)
 
     result = _dedupe_flights([cheap, pricey])
 

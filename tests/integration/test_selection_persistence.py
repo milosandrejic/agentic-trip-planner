@@ -8,7 +8,7 @@ from trip_planner.repositories import selection_repository
 from trip_planner.schemas.trips import FlightOption, HotelOption
 
 
-def make_flight(airline: str = "ITA Airways", price: str = "250.00") -> FlightOption:
+def make_flight(airline: str = "ITA Airways", price: float = 250.00) -> FlightOption:
     """Return a minimal valid flight option."""
     return FlightOption(
         airline=airline,
@@ -19,7 +19,7 @@ def make_flight(airline: str = "ITA Airways", price: str = "250.00") -> FlightOp
     )
 
 
-def make_hotel(name: str = "Hotel Roma", total: str = "480.00") -> HotelOption:
+def make_hotel(name: str = "Hotel Roma", total: float = 480.00) -> HotelOption:
     """Return a minimal valid hotel option."""
     return HotelOption(name=name, total_price=total, currency="EUR")
 
@@ -33,7 +33,7 @@ async def test_set_selected_flight_persists_snapshot(
     stored = await selection_repository.get_selected_flight(integration_db, persisted_trip.id)
     assert stored is not None
     assert stored.flight["airline"] == "ITA Airways"
-    assert stored.flight["price"] == "250.00"
+    assert stored.flight["price"] == 250.0
 
 
 async def test_set_selected_flight_replaces_previous_choice(
@@ -43,7 +43,7 @@ async def test_set_selected_flight_replaces_previous_choice(
     await selection_repository.set_selected_flight(integration_db, persisted_trip.id, make_flight())
 
     await selection_repository.set_selected_flight(
-        integration_db, persisted_trip.id, make_flight(airline="Ryanair", price="90.00")
+        integration_db, persisted_trip.id, make_flight(airline="Ryanair", price=90.00)
     )
 
     count = await integration_db.scalar(
@@ -64,7 +64,7 @@ async def test_set_selected_hotel_persists_and_replaces(
     await selection_repository.set_selected_hotel(integration_db, persisted_trip.id, make_hotel())
 
     await selection_repository.set_selected_hotel(
-        integration_db, persisted_trip.id, make_hotel(name="Grand Hotel", total="620.00")
+        integration_db, persisted_trip.id, make_hotel(name="Grand Hotel", total=620.00)
     )
 
     count = await integration_db.scalar(
@@ -76,4 +76,4 @@ async def test_set_selected_hotel_persists_and_replaces(
     assert count == 1
     assert stored is not None
     assert stored.hotel["name"] == "Grand Hotel"
-    assert stored.hotel["total_price"] == "620.00"
+    assert stored.hotel["total_price"] == 620.0

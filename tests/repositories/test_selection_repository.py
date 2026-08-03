@@ -12,7 +12,7 @@ def make_flight(airline: str = "British Airways") -> FlightOption:
     return FlightOption(
         airline=airline,
         stops=0,
-        price="250.00",
+        price=250.00,
         currency="GBP",
         outbound_date="2026-09-01",
     )
@@ -20,7 +20,7 @@ def make_flight(airline: str = "British Airways") -> FlightOption:
 
 def make_hotel(name: str = "Hotel Le Marais") -> HotelOption:
     """Return a valid HotelOption for selection tests."""
-    return HotelOption(name=name, total_price="380.00", currency="EUR")
+    return HotelOption(name=name, total_price=380.00, currency="EUR")
 
 
 def make_db() -> AsyncMock:
@@ -51,7 +51,7 @@ async def test_set_selected_flight_inserts_snapshot_when_absent() -> None:
     added: SelectedFlight = db.add.call_args[0][0]
     assert added.trip_id == trip_id
     assert added.flight["airline"] == "British Airways"
-    assert added.flight["price"] == "250.00"
+    assert added.flight["price"] == 250.0
 
 
 async def test_set_selected_flight_replaces_existing_selection() -> None:
@@ -113,7 +113,7 @@ async def test_set_selected_hotel_inserts_snapshot_when_absent() -> None:
     added: SelectedHotel = db.add.call_args[0][0]
     assert added.trip_id == trip_id
     assert added.hotel["name"] == "Hotel Le Marais"
-    assert added.hotel["total_price"] == "380.00"
+    assert added.hotel["total_price"] == 380.0
 
 
 async def test_set_selected_hotel_replaces_existing_selection() -> None:
