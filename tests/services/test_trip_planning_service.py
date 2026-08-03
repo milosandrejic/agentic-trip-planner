@@ -105,6 +105,7 @@ async def test_start_trip_persists_version_and_marks_ready(monkeypatch: MonkeyPa
 
     assert result.outcome.itinerary is itinerary
     assert trip.status is TripStatus.READY
+    assert trip.destination == "Paris"
     assert thread.status is ThreadStatus.READY
     assert thread.trip_id == trip.id
     itinerary_version_repository.add_version.assert_awaited_once()  # type: ignore[attr-defined]

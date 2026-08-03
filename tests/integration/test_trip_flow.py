@@ -55,6 +55,7 @@ async def test_create_trip_persists_trip_thread_version_and_messages(
     assert response.status_code == 201
     body = response.json()
     assert body["trip"]["status"] == "ready"
+    assert body["trip"]["destination"] == "Rome"
     assert body["result"]["type"] == "itinerary"
     assert body["result"]["itinerary"]["destination"] == "Rome"
 
@@ -62,6 +63,7 @@ async def test_create_trip_persists_trip_thread_version_and_messages(
     trip = await integration_db.get(Trip, trip_id)
     assert trip is not None
     assert trip.status == TripStatus.READY
+    assert trip.destination == "Rome"
     assert trip.current_version_id is not None
 
     versions = (

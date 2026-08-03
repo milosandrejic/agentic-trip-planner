@@ -140,6 +140,7 @@ class TripPlanningService:
                 self._db, trip.id, snapshot
             )
             await itinerary_version_repository.set_current(self._db, trip, version)
+            trip.destination = outcome.itinerary.destination
             await message_repository.create_message(
                 self._db,
                 thread_id=thread.id,
