@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 import trip_planner.agents.graph as graph_module
 from trip_planner.agents.graph import (
     PlannerOutcome,
+    _dedupe_flights,
     _route_after_reason,
     _route_after_triage,
     format_node,
@@ -19,7 +20,7 @@ from trip_planner.agents.graph import (
 )
 from trip_planner.agents.state import TripPlannerState
 from trip_planner.schemas.clarification import ClarificationRequest
-from trip_planner.schemas.trips import Activity, DayPlan, Itinerary
+from trip_planner.schemas.trips import Activity, DayPlan, FlightOption, Itinerary
 from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
 
 
@@ -34,6 +35,18 @@ def _make_itinerary() -> Itinerary:
     activity = Activity(time="Morning", description="Visit the Eiffel Tower")
     day = DayPlan(day=1, location="Paris", activities=[activity])
     return Itinerary(destination="Paris", total_days=1, summary="A great trip.", days=[day])
+
+
+def _make_flight(airline: str = "British Airways", price: str = "250.00") -> FlightOption:
+    return FlightOption(
+        airline=airline,
+        stops=0,
+        duration_min=90,
+        price=price,
+        currency="GBP",
+        outbound_date="2026-08-01",
+        return_date="2026-08-08",
+    )
 
 
 # --- _route_after_agent ---
@@ -198,6 +211,42 @@ async def test_format_node_feeds_structured_tool_results_to_llm() -> None:
     assert result.get("current_itinerary") == itinerary
     # the typed tool payloads are surfaced on the state, web-search text is excluded
     assert result.get("tool_results") == [flight_result]
+
+
+# --- _dedupe_flights ---
+
+
+def test_dedupe_flights_removes_identical_offers_preserving_order() -> None:
+    first = _make_flight()
+    duplicate = _make_flight()
+    other = _make_flight(airline="Ryanair", price="90.00")
+
+    result = _dedupe_flights([first, duplicate, other])
+
+    assert result == [first, other]
+
+
+def test_dedupe_flights_keeps_offers_differing_by_price() -> None:
+    cheap = _make_flight(price="90.00")
+    pricey = _make_flight(price="250.00")
+
+    result = _dedupe_flights([cheap, pricey])
+
+    assert result == [cheap, pricey]
+
+
+async def test_format_node_deduplicates_flight_offers() -> None:
+    itinerary = _make_itinerary().model_copy(
+        update={"flights": [_make_flight(), _make_flight(), _make_flight(airline="Ryanair")]}
+    )
+    state = _make_state([AIMessage(content="Here is your itinerary.")])
+
+    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=itinerary)
+        result = await format_node(state)
+
+    flights = result["current_itinerary"].flights  # type: ignore[union-attr]
+    assert [flight.airline for flight in flights] == ["British Airways", "Ryanair"]
 
 
 # --- _route_after_triage ---

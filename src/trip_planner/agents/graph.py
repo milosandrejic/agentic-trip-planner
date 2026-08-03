@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, SecretStr
 from trip_planner.agents.state import TripPlannerState
 from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
-from trip_planner.schemas.trips import Itinerary
+from trip_planner.schemas.trips import FlightOption, Itinerary
 from trip_planner.services.types import ToolResult
 from trip_planner.tools.discover_places import discover_places_tool
 from trip_planner.tools.find_place_by_name import find_place_by_name_tool
@@ -272,6 +272,32 @@ def _collect_tool_results(messages: list[BaseMessage]) -> list[ToolResult[BaseMo
     return results
 
 
+def _dedupe_flights(flights: list[FlightOption]) -> list[FlightOption]:
+    """Drop identical flight offers, keeping the first occurrence in order.
+
+    Providers and the LLM occasionally emit the same offer twice; the frontend must never receive
+    duplicates. Two offers are identical when airline, dates, duration, and price all match.
+    """
+    seen: set[tuple[str, str, str | None, int | None, str, str]] = set()
+    unique: list[FlightOption] = []
+
+    for flight in flights:
+        key = (
+            flight.airline,
+            flight.outbound_date,
+            flight.return_date,
+            flight.duration_min,
+            flight.price,
+            flight.currency,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(flight)
+
+    return unique
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Force the conversation into a structured Itinerary via with_structured_output."""
     format_instruction = SystemMessage(content=_FORMAT_PROMPT)
@@ -280,6 +306,7 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
     messages_with_instruction = structured_messages + [format_instruction]
 
     itinerary = cast(Itinerary, await _llm_structured.ainvoke(messages_with_instruction))
+    itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
 
     return TripPlannerState(
         messages=[],
