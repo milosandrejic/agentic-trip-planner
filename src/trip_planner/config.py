@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # LLM (Phase 2+)
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    # Dedicated model for structured itinerary generation; stronger models avoid truncated days.
+    itinerary_model: str = "gpt-5.6-terra"
 
     # Tools (Phase 3)
     tavily_api_key: str = ""

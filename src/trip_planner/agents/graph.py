@@ -106,21 +106,28 @@ _MAX_TOOL_CALLS = 8
 _RECURSION_LIMIT = 25
 _RUN_TIMEOUT_SECONDS = 120.0
 
+# The formatter is re-invoked up to this many times when it emits fewer days than requested.
+_MAX_FORMAT_ATTEMPTS = 3
 
-def _build_llm(temperature: float) -> ChatOpenAI:
-    """Create a ChatOpenAI client for the configured model at the given temperature."""
+
+def _build_llm(temperature: float, model: str | None = None) -> ChatOpenAI:
+    """Create a ChatOpenAI client for the given model at the given temperature.
+
+    Falls back to the default configured model when none is supplied.
+    """
     return ChatOpenAI(
-        model=_settings.openai_model,
+        model=model or _settings.openai_model,
         api_key=SecretStr(_settings.openai_api_key),
         temperature=temperature,
     )
 
 
 # Reasoning stays creative; triage and structured formatting are deterministic (temperature 0)
-# so completeness checks and the final itinerary are stable across runs.
+# so completeness checks and the final itinerary are stable across runs. Itinerary formatting uses
+# a dedicated, stronger model that reliably emits every requested day.
 _reasoning_llm = _build_llm(_REASONING_TEMPERATURE)
 _triage_llm = _build_llm(_DETERMINISTIC_TEMPERATURE)
-_format_llm = _build_llm(_DETERMINISTIC_TEMPERATURE)
+_format_llm = _build_llm(_DETERMINISTIC_TEMPERATURE, model=_settings.itinerary_model)
 
 _llm_with_tools = _reasoning_llm.bind_tools(_TOOLS)
 _llm_structured = _format_llm.with_structured_output(Itinerary)
@@ -298,6 +305,38 @@ def _dedupe_flights(flights: list[FlightOption]) -> list[FlightOption]:
     return unique
 
 
+def _completeness_reminder(total_days: int, produced: int) -> SystemMessage:
+    """Build a reminder telling the model to regenerate every missing day."""
+    content = (
+        f"The itinerary must contain exactly {total_days} DayPlan entries, but the previous "
+        f"attempt produced only {produced}. Regenerate the COMPLETE itinerary now with all "
+        f"{total_days} days (day 1 through day {total_days}), each with at least 3 activities. "
+        "Do not stop early, truncate, or summarise."
+    )
+
+    return SystemMessage(content=content)
+
+
+async def _format_complete_itinerary(messages: list[BaseMessage]) -> Itinerary:
+    """Generate the itinerary, retrying with a reminder until every requested day is present.
+
+    gpt-4o-mini sometimes emits only the first day of a multi-day trip; when the DayPlan count
+    falls short of total_days we regenerate with an explicit reminder and keep the fullest result,
+    bounded by _MAX_FORMAT_ATTEMPTS to cap latency and cost.
+    """
+    itinerary = cast(Itinerary, await _llm_structured.ainvoke(messages))
+
+    for _ in range(_MAX_FORMAT_ATTEMPTS - 1):
+        if len(itinerary.days) >= itinerary.total_days:
+            break
+        reminder = _completeness_reminder(itinerary.total_days, len(itinerary.days))
+        candidate = cast(Itinerary, await _llm_structured.ainvoke([*messages, reminder]))
+        if len(candidate.days) > len(itinerary.days):
+            itinerary = candidate
+
+    return itinerary
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Force the conversation into a structured Itinerary via with_structured_output."""
     format_instruction = SystemMessage(content=_FORMAT_PROMPT)
@@ -305,7 +344,7 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
     structured_messages = _with_structured_tool_results(conversation)
     messages_with_instruction = structured_messages + [format_instruction]
 
-    itinerary = cast(Itinerary, await _llm_structured.ainvoke(messages_with_instruction))
+    itinerary = await _format_complete_itinerary(messages_with_instruction)
     itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
 
     return TripPlannerState(

@@ -37,6 +37,22 @@ def _make_itinerary() -> Itinerary:
     return Itinerary(destination="Paris", total_days=1, summary="A great trip.", days=[day])
 
 
+def _make_multi_day_itinerary(days_count: int, total_days: int) -> Itinerary:
+    """Return an itinerary with days_count DayPlan entries but a stated total_days."""
+    days = [
+        DayPlan(
+            day=i,
+            location="Paris",
+            activities=[Activity(time="Morning", description=f"Day {i} activity")],
+        )
+        for i in range(1, days_count + 1)
+    ]
+
+    return Itinerary(
+        destination="Paris", total_days=total_days, summary="A great trip.", days=days
+    )
+
+
 def _make_flight(airline: str = "British Airways", price: float = 250.00) -> FlightOption:
     return FlightOption(
         airline=airline,
@@ -247,6 +263,49 @@ async def test_format_node_deduplicates_flight_offers() -> None:
 
     flights = result["current_itinerary"].flights  # type: ignore[union-attr]
     assert [flight.airline for flight in flights] == ["British Airways", "Ryanair"]
+
+
+async def test_format_node_retries_until_all_requested_days_present() -> None:
+    short = _make_multi_day_itinerary(1, 3)
+    full = _make_multi_day_itinerary(3, 3)
+    state = _make_state([AIMessage(content="Here is your itinerary.")])
+
+    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(side_effect=[short, full])
+        result = await format_node(state)
+
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert len(itinerary.days) == 3
+    assert mock_llm.ainvoke.await_count == 2
+
+
+async def test_format_node_does_not_retry_when_all_days_present() -> None:
+    full = _make_multi_day_itinerary(3, 3)
+    state = _make_state([AIMessage(content="Here is your itinerary.")])
+
+    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=full)
+        result = await format_node(state)
+
+    assert result.get("current_itinerary") is not None
+    assert mock_llm.ainvoke.await_count == 1
+
+
+async def test_format_node_keeps_fullest_itinerary_after_max_attempts() -> None:
+    first = _make_multi_day_itinerary(1, 3)
+    second = _make_multi_day_itinerary(2, 3)
+    third = _make_multi_day_itinerary(1, 3)
+    state = _make_state([AIMessage(content="Here is your itinerary.")])
+
+    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(side_effect=[first, second, third])
+        result = await format_node(state)
+
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert len(itinerary.days) == 2
+    assert mock_llm.ainvoke.await_count == 3
 
 
 # --- _route_after_triage ---
@@ -562,8 +621,9 @@ def test_triage_llm_is_deterministic() -> None:
     assert graph_module._triage_llm.temperature == 0.0
 
 
-def test_format_llm_is_deterministic() -> None:
-    assert graph_module._format_llm.temperature == 0.0
+def test_format_llm_uses_dedicated_itinerary_model() -> None:
+    assert graph_module._format_llm.model_name == graph_module._settings.itinerary_model
+    assert graph_module._reasoning_llm.model_name == graph_module._settings.openai_model
 
 
 def test_reasoning_llm_is_creative() -> None:
