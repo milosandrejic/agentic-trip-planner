@@ -2,6 +2,7 @@
 from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
 
+from trip_planner.config import get_settings
 from trip_planner.services.liteapi_client import LiteApiError
 from trip_planner.services.types import ToolStatus
 from trip_planner.tools.hotel_search import (
@@ -64,6 +65,7 @@ def test_build_rates_request_includes_hotels_dates_and_occupancy() -> None:
     assert payload["checkin"] == "2024-07-01"
     assert payload["checkout"] == "2024-07-05"
     assert payload["occupancies"] == [{"adults": 2}]
+    assert payload["currency"] == get_settings().default_currency
 
 
 # --- _extract_lowest_price ---

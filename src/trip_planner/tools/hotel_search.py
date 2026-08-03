@@ -5,11 +5,11 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from trip_planner.config import get_settings
 from trip_planner.services.liteapi_client import LiteApiClient, LiteApiError
 from trip_planner.services.types import HotelResult, HotelSearchResult, ToolResult
 
 _MAX_HOTELS = 3
-_CURRENCY = "USD"
 _GUEST_NATIONALITY = "US"
 _PROVIDER = "liteapi"
 
@@ -36,7 +36,7 @@ def _build_rates_request(
         "checkin": checkin,
         "checkout": checkout,
         "occupancies": [{"adults": adults}],
-        "currency": _CURRENCY,
+        "currency": get_settings().default_currency,
         "guestNationality": _GUEST_NATIONALITY,
     }
 

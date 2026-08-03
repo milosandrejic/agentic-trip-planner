@@ -2,6 +2,8 @@
 from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
 
+from trip_planner.config import get_settings
+from trip_planner.services.currency_service import CurrencyError
 from trip_planner.services.duffel_client import DuffelError
 from trip_planner.services.types import ToolStatus
 from trip_planner.tools.flight_search import (
@@ -12,6 +14,7 @@ from trip_planner.tools.flight_search import (
 
 _PATCH_POST = "trip_planner.tools.flight_search._client.post"
 _PATCH_GET = "trip_planner.tools.flight_search._client.get"
+_PATCH_CONVERT = "trip_planner.tools.flight_search._converter.convert"
 
 _OFFER_REQUEST_RESPONSE = {"data": {"id": "ofr_123"}}
 
@@ -230,3 +233,41 @@ async def test_flight_search_tool_error_envelope_not_retryable_on_bad_response()
     assert result.status == ToolStatus.ERROR
     assert result.error is not None
     assert result.error.retryable is False
+
+
+# --- currency normalisation ---
+
+
+async def test_flight_search_converts_prices_to_default_currency() -> None:
+    with (
+        patch(_PATCH_POST, new_callable=AsyncMock) as mock_post,
+        patch(_PATCH_GET, new_callable=AsyncMock) as mock_get,
+        patch(_PATCH_CONVERT, new_callable=AsyncMock) as mock_convert,
+    ):
+        mock_post.return_value = _OFFER_REQUEST_RESPONSE
+        mock_get.return_value = _OFFERS_RESPONSE
+        mock_convert.return_value = 300.00
+        message = await flight_search_tool.ainvoke(_tool_call(_SUCCESS_ARGS))
+
+    result = message.artifact
+    target = get_settings().default_currency
+    assert result.data is not None
+    assert all(offer.currency == target for offer in result.data.offers)
+    assert result.data.offers[0].total_amount == "300.00"
+
+
+async def test_flight_search_keeps_original_price_when_conversion_fails() -> None:
+    with (
+        patch(_PATCH_POST, new_callable=AsyncMock) as mock_post,
+        patch(_PATCH_GET, new_callable=AsyncMock) as mock_get,
+        patch(_PATCH_CONVERT, new_callable=AsyncMock) as mock_convert,
+    ):
+        mock_post.return_value = _OFFER_REQUEST_RESPONSE
+        mock_get.return_value = _OFFERS_RESPONSE
+        mock_convert.side_effect = CurrencyError("rates unavailable")
+        message = await flight_search_tool.ainvoke(_tool_call(_SUCCESS_ARGS))
+
+    result = message.artifact
+    assert result.data is not None
+    assert result.data.offers[0].currency == "GBP"
+    assert result.data.offers[0].total_amount == "250.00"

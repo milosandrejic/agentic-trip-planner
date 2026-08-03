@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     geoapify_api_key: str = ""
     google_places_api_key: str = ""
 
+    # Currency — the single currency every itinerary is normalised to
+    default_currency: str = "EUR"
+
     # Outbound HTTP (Phase 6) — timeouts in seconds, applied to every provider
     http_connect_timeout: float = 5.0
     http_read_timeout: float = 30.0

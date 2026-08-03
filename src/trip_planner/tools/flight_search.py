@@ -5,6 +5,8 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from trip_planner.config import get_settings
+from trip_planner.services.currency_service import CurrencyConverter, CurrencyError
 from trip_planner.services.duffel_client import DuffelClient, DuffelError
 from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
 
@@ -13,6 +15,7 @@ _CABIN_CLASS = "economy"
 _PROVIDER = "duffel"
 
 _client = DuffelClient()
+_converter = CurrencyConverter()
 
 
 class _FlightSearchInput(BaseModel):
@@ -58,6 +61,38 @@ def _build_offer_request(
             "cabin_class": _CABIN_CLASS,
         }
     }
+
+
+async def _convert_offer_currencies(
+    offers: list[dict[str, Any]], target_currency: str
+) -> list[dict[str, Any]]:
+    """Return offers with total_amount/total_currency converted to the target currency.
+
+    Duffel prices each offer in the airline's currency, so an itinerary can mix currencies;
+    normalising here keeps every price in one currency. On conversion failure the provider's
+    original price is kept so the offer still surfaces.
+    """
+    normalized: list[dict[str, Any]] = []
+
+    for offer in offers:
+        raw_amount = offer.get("total_amount")
+        raw_currency = offer.get("total_currency", "")
+        converted = dict(offer)
+
+        if raw_amount is not None and raw_currency:
+            try:
+                amount = await _converter.convert(
+                    float(raw_amount), raw_currency, target_currency
+                )
+            except (CurrencyError, ValueError):
+                pass
+            else:
+                converted["total_amount"] = f"{amount:.2f}"
+                converted["total_currency"] = target_currency
+
+        normalized.append(converted)
+
+    return normalized
 
 
 def _format_offers(offers: list[dict[str, Any]]) -> str:
@@ -154,6 +189,7 @@ async def flight_search_tool(
             params={"offer_request_id": offer_request_id, "limit": str(_MAX_OFFERS)},
         )
         offers: list[dict[str, Any]] = offers_response.get("data", [])
+        offers = await _convert_offer_currencies(offers, get_settings().default_currency)
     except DuffelError as exc:
         content = f"Flight search unavailable: {exc.detail}"
         result: ToolResult[FlightSearchResult] = ToolResult[FlightSearchResult].fail(
