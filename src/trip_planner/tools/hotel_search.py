@@ -1,19 +1,29 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 import time
-from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from trip_planner.config import get_settings
-from trip_planner.services.liteapi_client import LiteApiClient, LiteApiError
+from trip_planner.logging_config import get_logger
+from trip_planner.services.hotels import (
+    HotelProvider,
+    HotelSearchQuery,
+    LiteApiHotelProvider,
+    ProviderHotel,
+    filter_and_rank_hotels,
+)
+from trip_planner.services.liteapi_client import LiteApiError
 from trip_planner.services.types import HotelResult, HotelSearchResult, ToolResult
 
 _MAX_HOTELS = 3
-_GUEST_NATIONALITY = "US"
 _PROVIDER = "liteapi"
 
-_client = LiteApiClient()
+_logger = get_logger(__name__)
+
+# The planner talks only to this abstraction, so LiteAPI can later be swapped for another
+# provider without touching the tool, graph, or prompts.
+_provider: HotelProvider = LiteApiHotelProvider()
 
 
 class _HotelSearchInput(BaseModel):
@@ -22,110 +32,72 @@ class _HotelSearchInput(BaseModel):
     checkin: str = Field(description="Check-in date in ISO format, e.g. '2024-07-01'.")
     checkout: str = Field(description="Check-out date in ISO format, e.g. '2024-07-05'.")
     adults: int = Field(default=2, ge=1, le=8, description="Number of adult guests.")
+    max_nightly_price: float | None = Field(
+        default=None,
+        description="Only return hotels at or below this price per night. Set it when the user "
+        "asks for cheaper or budget-friendly hotels.",
+    )
+    min_star_rating: float | None = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="Only return hotels at or above this star rating, e.g. 3 for '3+ star'.",
+    )
 
 
-def _build_rates_request(
-    hotel_ids: list[str],
-    checkin: str,
-    checkout: str,
-    adults: int,
-) -> dict[str, Any]:
-    """Build the LiteAPI rates request payload for the given hotels and stay."""
-    return {
-        "hotelIds": hotel_ids,
-        "checkin": checkin,
-        "checkout": checkout,
-        "occupancies": [{"adults": adults}],
-        "currency": get_settings().default_currency,
-        "guestNationality": _GUEST_NATIONALITY,
-    }
-
-
-def _extract_lowest_price(hotel_rate: dict[str, Any]) -> tuple[str, str]:
-    """Return the (amount, currency) of the cheapest rate for a hotel, or ('N/A', '')."""
-    room_types: list[dict[str, Any]] = hotel_rate.get("roomTypes", [])
-
-    amounts: list[float] = []
-    currency = ""
-
-    for room_type in room_types:
-        rates: list[dict[str, Any]] = room_type.get("rates", [])
-        for rate in rates:
-            total = rate.get("retailRate", {}).get("total", [])
-            first_total = total[0] if total else {}
-            amount = first_total.get("amount")
-            if amount is not None:
-                amounts.append(float(amount))
-                currency = first_total.get("currency", currency)
-
-    if not amounts:
-        return "N/A", ""
-
-    return f"{min(amounts):.2f}", currency
-
-
-def _format_hotels(
-    hotels: list[dict[str, Any]], price_by_id: dict[str, tuple[str, str]]
-) -> str:
-    """Format the top hotels with their lowest available price for the LLM."""
+def _format_hotels(hotels: list[ProviderHotel]) -> str:
+    """Format the top hotels with their nightly price and rating for the LLM."""
     if not hotels:
-        return "No hotels found for this city and dates."
+        return "No hotels found matching the requested criteria."
 
     lines: list[str] = []
+    for i, hotel in enumerate(hotels, start=1):
+        price = f"{hotel.nightly_price:.2f}" if hotel.nightly_price is not None else "N/A"
+        currency = hotel.currency or ""
+        rating = hotel.star_rating if hotel.star_rating is not None else "N/A"
 
-    for i, hotel in enumerate(hotels[:_MAX_HOTELS], start=1):
-        hotel_id = str(hotel.get("id", ""))
-        name = hotel.get("name", "Unknown hotel")
-        rating = hotel.get("rating", hotel.get("stars", "N/A"))
-        address = hotel.get("address", "")
-
-        amount, currency = price_by_id.get(hotel_id, ("N/A", ""))
-
-        lines.append(f"Option {i}: {name}")
-        lines.append(f"  Price: {amount} {currency} total")
-        lines.append(f"  Rating: {rating}")
-
-        if address:
-            lines.append(f"  Address: {address}")
+        lines.append(f"Option {i}: {hotel.name}")
+        lines.append(f"  Price: {price} {currency} per night")
+        lines.append(f"  Star rating: {rating}")
+        if hotel.address:
+            lines.append(f"  Address: {hotel.address}")
 
     return "\n".join(lines)
 
 
+def _to_hotel_result(hotel: ProviderHotel) -> HotelResult:
+    """Map a normalised ProviderHotel into the typed HotelResult carried in tool state."""
+    nightly = f"{hotel.nightly_price:.2f}" if hotel.nightly_price is not None else None
+    total = f"{hotel.total_price:.2f}" if hotel.total_price is not None else ""
+
+    return HotelResult(
+        hotel_id=hotel.hotel_id,
+        name=hotel.name,
+        total_price=total,
+        currency=hotel.currency or "",
+        address=hotel.address,
+        rating=hotel.review_rating if hotel.review_rating is not None else hotel.star_rating,
+        nightly_price=nightly,
+        latitude=hotel.latitude,
+        longitude=hotel.longitude,
+        booking_url=hotel.booking_url,
+    )
+
+
 def _build_hotel_payload(
-    city_name: str,
-    country_code: str,
-    checkin: str,
-    checkout: str,
-    adults: int,
-    hotels: list[dict[str, Any]],
-    price_by_id: dict[str, tuple[str, str]],
+    query: HotelSearchQuery, hotels: list[ProviderHotel]
 ) -> HotelSearchResult:
-    """Map raw LiteAPI hotels and rates into a typed HotelSearchResult payload."""
+    """Map the ranked ProviderHotel list into a typed HotelSearchResult payload."""
     hotel_results: list[HotelResult] = []
-
-    for hotel in hotels[:_MAX_HOTELS]:
-        hotel_id = str(hotel.get("id", ""))
-        amount, currency = price_by_id.get(hotel_id, ("", ""))
-
-        hotel_results.append(
-            HotelResult(
-                hotel_id=hotel_id,
-                name=hotel.get("name", "Unknown hotel"),
-                total_price=amount,
-                currency=currency,
-                address=hotel.get("address") or None,
-                rating=hotel.get("rating", hotel.get("stars")),
-                latitude=hotel.get("latitude"),
-                longitude=hotel.get("longitude"),
-            )
-        )
+    for hotel in hotels:
+        hotel_results.append(_to_hotel_result(hotel))
 
     return HotelSearchResult(
-        city=city_name,
-        country_code=country_code,
-        checkin=checkin,
-        checkout=checkout,
-        adults=adults,
+        city=query.city_name,
+        country_code=query.country_code,
+        checkin=query.checkin,
+        checkout=query.checkout,
+        adults=query.adults,
         hotels=hotel_results,
     )
 
@@ -137,45 +109,50 @@ async def hotel_search_tool(
     checkin: str,
     checkout: str,
     adults: int = 2,
+    max_nightly_price: float | None = None,
+    min_star_rating: float | None = None,
 ) -> tuple[str, ToolResult[HotelSearchResult]]:
     """Search for available hotels in a city for the given check-in and check-out dates.
 
-    Returns a formatted summary of the top available hotels including name, total
-    price for the stay, star rating, and address.
+    Accepts optional max_nightly_price and min_star_rating constraints so a follow-up asking
+    for cheaper or higher-rated hotels returns a different set. Returns a formatted summary of
+    the top matching hotels including name, nightly price, star rating, and address.
     """
     start = time.perf_counter()
+    query = HotelSearchQuery(
+        city_name=city_name,
+        country_code=country_code,
+        checkin=checkin,
+        checkout=checkout,
+        adults=adults,
+        currency=get_settings().default_currency,
+        max_nightly_price=max_nightly_price,
+        min_star_rating=min_star_rating,
+    )
+    _logger.info(
+        "hotel_search.request",
+        city=city_name,
+        country_code=country_code,
+        checkin=checkin,
+        checkout=checkout,
+        adults=adults,
+        max_nightly_price=max_nightly_price,
+        min_star_rating=min_star_rating,
+    )
 
+    ranked: list[ProviderHotel] = []
     try:
-        hotels_response = await _client.get(
-            "/data/hotels",
-            params={
-                "cityName": city_name,
-                "countryCode": country_code,
-                "limit": str(_MAX_HOTELS),
-            },
-        )
-        hotels: list[dict[str, Any]] = hotels_response.get("data", [])
+        candidates = await _provider.search(query)
+        ranked = filter_and_rank_hotels(candidates, query)[:_MAX_HOTELS]
 
-        if not hotels:
-            content = "No hotels found for this city and dates."
+        if not ranked:
+            content = "No hotels found matching the requested criteria."
             result: ToolResult[HotelSearchResult] = ToolResult[HotelSearchResult].empty(
                 provider=_PROVIDER
             )
         else:
-            hotel_ids = [str(hotel.get("id", "")) for hotel in hotels]
-            rates_body = _build_rates_request(hotel_ids, checkin, checkout, adults)
-
-            rates_response = await _client.post("/hotels/rates", rates_body)
-            hotel_rates: list[dict[str, Any]] = rates_response.get("data", [])
-
-            price_by_id = {
-                str(rate.get("hotelId", "")): _extract_lowest_price(rate) for rate in hotel_rates
-            }
-
-            payload = _build_hotel_payload(
-                city_name, country_code, checkin, checkout, adults, hotels, price_by_id
-            )
-            content = _format_hotels(hotels, price_by_id)
+            payload = _build_hotel_payload(query, ranked)
+            content = _format_hotels(ranked)
             result = ToolResult.ok(provider=_PROVIDER, data=payload)
     except LiteApiError as exc:
         content = f"Hotel search unavailable: {exc.detail}"
@@ -186,5 +163,11 @@ async def hotel_search_tool(
         content = f"Unexpected response from LiteAPI: {exc}"
         result = ToolResult[HotelSearchResult].fail(provider=_PROVIDER, message=content)
 
+    _logger.info(
+        "hotel_search.response",
+        provider=_PROVIDER,
+        status=result.status.value,
+        returned=[(hotel.name, hotel.nightly_price) for hotel in ranked],
+    )
     result.latency_ms = round((time.perf_counter() - start) * 1000, 2)
     return content, result
