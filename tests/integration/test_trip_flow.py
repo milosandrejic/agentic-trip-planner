@@ -64,6 +64,8 @@ async def test_create_trip_persists_trip_thread_version_and_messages(
     assert trip is not None
     assert trip.status == TripStatus.READY
     assert trip.destination == "Rome"
+    assert trip.title == "1 Day in Rome"
+    assert trip.slug.startswith("trip-")
     assert trip.current_version_id is not None
 
     versions = (
@@ -117,6 +119,8 @@ async def test_create_trip_with_clarification_leaves_trip_in_draft(
     assert trip is not None
     assert trip.status == TripStatus.DRAFT
     assert trip.current_version_id is None
+    # No itinerary yet, so the trip keeps its placeholder title and never echoes the prompt.
+    assert trip.title == "New trip"
 
     versions = (
         await integration_db.execute(

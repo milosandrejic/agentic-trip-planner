@@ -1,4 +1,3 @@
-import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -20,6 +19,9 @@ from trip_planner.services import trip_lifecycle
 # Signature of the planning boundary the service depends on. Injected so tests can supply a
 # stub instead of executing the real LangGraph run.
 PlannerCallable = Callable[[str, str], Awaitable[PlannerOutcome]]
+
+# Placeholder title held until the first itinerary yields structured data to name the trip.
+_PENDING_TITLE = "New trip"
 
 
 class PlannerContractError(Exception):
@@ -55,13 +57,11 @@ class TripPlanningService:
         The request (trip, thread, and first human message) commits before the graph runs so the
         planner never executes inside an open transaction.
         """
-        title = query[:80]
-
         trip = await trip_repository.create_trip(
-            self._db, user_id=user.id, title=title, slug=self._make_slug(query)
+            self._db, user_id=user.id, title=_PENDING_TITLE, slug=self._new_slug()
         )
         thread = await thread_repository.create_thread(
-            self._db, user_id=user.id, title=title, slug=self._make_slug(query)
+            self._db, user_id=user.id, title=_PENDING_TITLE, slug=self._new_slug()
         )
         thread.trip_id = trip.id
 
@@ -141,6 +141,10 @@ class TripPlanningService:
             )
             await itinerary_version_repository.set_current(self._db, trip, version)
             trip.destination = outcome.itinerary.destination
+            trip.title = self._make_title(
+                outcome.itinerary.destination, outcome.itinerary.total_days
+            )
+            thread.title = trip.title
             await message_repository.create_message(
                 self._db,
                 thread_id=thread.id,
@@ -177,9 +181,15 @@ class TripPlanningService:
         trip_lifecycle.assert_transition(trip.status, target)
         trip.status = target
 
-    def _make_slug(self, text: str) -> str:
-        """Build a URL-safe slug from text with a random suffix to prevent collisions."""
-        cleaned = re.sub(r"[^a-z0-9]+", "-", text[:60].lower()).strip("-")
-        suffix = uuid.uuid4().hex[:8]
+    def _new_slug(self) -> str:
+        """Generate a stable, prompt-independent slug that is unique per record."""
+        return f"trip-{uuid.uuid4().hex}"
 
-        return f"{cleaned}-{suffix}"
+    def _make_title(self, destination: str, total_days: int) -> str:
+        """Build a human-readable trip title from structured itinerary data."""
+        if total_days < 1:
+            return destination
+
+        unit = "Day" if total_days == 1 else "Days"
+
+        return f"{total_days} {unit} in {destination}"

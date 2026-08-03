@@ -106,12 +106,35 @@ async def test_start_trip_persists_version_and_marks_ready(monkeypatch: MonkeyPa
     assert result.outcome.itinerary is itinerary
     assert trip.status is TripStatus.READY
     assert trip.destination == "Paris"
+    assert trip.title == "1 Day in Paris"
     assert thread.status is ThreadStatus.READY
     assert thread.trip_id == trip.id
     itinerary_version_repository.add_version.assert_awaited_once()  # type: ignore[attr-defined]
     itinerary_version_repository.set_current.assert_awaited_once()  # type: ignore[attr-defined]
     # Request commit followed by the atomic response commit.
     assert db.commit.await_count == 2
+
+
+async def test_start_trip_title_falls_back_to_destination_for_nonpositive_days(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    trip = make_trip()
+    thread = make_thread()
+    patch_repositories(monkeypatch, trip=trip, thread=thread)
+
+    activity = Activity(time="Morning", description="Louvre visit")
+    itinerary = Itinerary(
+        destination="Paris",
+        total_days=0,
+        summary="Plans pending",
+        days=[DayPlan(day=1, location="Paris", activities=[activity])],
+    )
+    planner = AsyncMock(return_value=PlannerOutcome(itinerary=itinerary))
+    db = make_db()
+
+    await TripPlanningService(db, planner=planner).start_trip(make_user(), "Plan Paris")
+
+    assert trip.title == "Paris"
 
 
 async def test_start_trip_with_clarification_returns_to_draft(monkeypatch: MonkeyPatch) -> None:
