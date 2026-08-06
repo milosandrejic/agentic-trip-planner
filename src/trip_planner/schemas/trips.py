@@ -92,13 +92,12 @@ class HotelOption(BaseModel):
         fields = cast("dict[str, object]", data)
         raw = fields.get("nightly_price")
         if isinstance(raw, str) and raw.strip().startswith("~"):
-            updated: dict[str, object] = {
+            return {
                 **fields,
                 "nightly_price": raw.strip()[1:],
                 "is_estimated": True,
             }
-            return updated
-        return data
+        return fields
 
     @field_validator(
         "area", "nightly_price", "total_price", "currency", "booking_url", mode="before"
@@ -111,7 +110,12 @@ class HotelOption(BaseModel):
 class Itinerary(BaseModel):
     destination: str
     total_days: int
-    summary: str
+    summary: str = Field(
+        description=(
+            "A trip-focused overview (2-4 sentences) of the destination and plan highlights. "
+            "Must not mention prices, tool or provider names, or search/API details."
+        )
+    )
     days: list[DayPlan]
     flights: list[FlightOption] = Field(
         default_factory=lambda: [],

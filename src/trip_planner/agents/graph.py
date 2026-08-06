@@ -99,7 +99,10 @@ _FORMAT_PROMPT = (
     "For each activity, populate the place fields (place_id, latitude, longitude, address, rating, "
     "opening_hours, price_level, ticket_url) whenever the places tools provided that data. "
     "Include all sources discussed. "
-    "Do not truncate or summarise days — output the full itinerary."
+    "Do not truncate or summarise days — output the full itinerary. "
+    "The summary field must describe the trip itself (destination highlights, pace, what the days "
+    "cover) in 2-4 sentences. Never mention prices, tool or provider names, or search/API details in "
+    "the summary — that information belongs only in the flights and hotels fields."
 )
 
 # Section-only prompts back the partial-regeneration path: a scoped follow-up (hotels, flights,
