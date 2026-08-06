@@ -213,6 +213,40 @@ async def test_reason_node_omits_hotel_constraint_reminder_when_unset() -> None:
     assert not any("hotel_search_tool" in getattr(m, "content", "") for m in sent_messages)
 
 
+async def test_reason_node_logs_trailing_tool_results() -> None:
+    """A ToolMessage batch appended by the tools node must be logged before reasoning again."""
+    structured_result = ToolResult.ok(
+        provider="duffel",
+        data=FlightSearchResult(
+            origin="LHR", destination="CDG", departure_date="2026-08-01", passengers=1, offers=[]
+        ),
+    )
+    structured_tool_msg = ToolMessage(
+        content="No flights found.",
+        tool_call_id="call_1",
+        name="flight_search_tool",
+        artifact=structured_result,
+    )
+    web_tool_msg = ToolMessage(
+        content="Raw web search text", tool_call_id="call_2", name="web_search"
+    )
+    state = _make_state([HumanMessage(content="Paris"), structured_tool_msg, web_tool_msg])
+
+    with (
+        patch("trip_planner.agents.graph._llm_with_tools") as mock_llm,
+        patch("trip_planner.agents.graph._logger") as mock_logger,
+    ):
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Done."))
+        await reason_node(state)
+
+    logged_tools = [
+        call.kwargs["tool"]
+        for call in mock_logger.debug.call_args_list
+        if call.args and call.args[0] == "followup.tool_result"
+    ]
+    assert logged_tools == ["flight_search_tool", "web_search"]
+
+
 # --- format_node ---
 
 

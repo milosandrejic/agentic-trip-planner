@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from trip_planner.agents.state import TripPlannerState, UpdateScope
 from trip_planner.config import get_settings
+from trip_planner.logging_config import get_logger
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import DayPlan, FlightOption, HotelOption, Itinerary
 from trip_planner.services.types import ToolResult
@@ -26,6 +27,8 @@ from trip_planner.tools.hotel_search import hotel_search_tool
 from trip_planner.tools.place_details import place_details_tool
 from trip_planner.tools.web_search import web_search_tool
 from trip_planner.tools.weather import weather_tool
+
+_logger = get_logger(__name__)
 
 _TOOLS = [
     web_search_tool,
@@ -284,6 +287,16 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
     is_modification = decision.intent is _TriageIntent.ITINERARY_MODIFICATION
     update_scope = decision.update_scope if has_itinerary and is_modification else UpdateScope.FULL
 
+    _logger.info(
+        "followup.triage",
+        intent=decision.intent.value,
+        has_itinerary=has_itinerary,
+        should_clarify=should_clarify,
+        update_scope=update_scope.value,
+        hotel_max_nightly_price=decision.hotel_max_nightly_price,
+        hotel_min_star_rating=decision.hotel_min_star_rating,
+    )
+
     # Reset transient outputs so a resumed thread never reads a previous turn's itinerary
     # or tool results (this graph is checkpointed and re-entered on follow-up messages). The
     # previous itinerary is carried forward so the formatter can splice a scoped change into it.
@@ -322,12 +335,37 @@ def _hotel_constraint_reminder(max_nightly_price: float | None, min_star_rating:
     )
 
 
+def _trailing_tool_messages(messages: list[BaseMessage]) -> list[ToolMessage]:
+    """Collect the run of ToolMessages most recently appended, in original order.
+
+    The tools node appends one ToolMessage per requested call directly after the AIMessage that
+    requested them, so this is exactly the batch reason_node is about to reason over again.
+    """
+    trailing: list[ToolMessage] = []
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage):
+            break
+        trailing.append(message)
+    trailing.reverse()
+    return trailing
+
+
 async def reason_node(state: TripPlannerState) -> TripPlannerState:
     """Reason about the current state: call tools or produce a final answer.
 
     Once the run has spent its tool-call budget the reasoner is invoked without tools bound,
     forcing it to answer from the evidence already gathered instead of looping indefinitely.
     """
+    for tool_message in _trailing_tool_messages(state["messages"]):
+        artifact = tool_message.artifact
+        status = artifact.status.value if isinstance(artifact, ToolResult) else None
+        _logger.debug(
+            "followup.tool_result",
+            tool=tool_message.name,
+            status=status,
+            content_preview=str(tool_message.content)[:200],
+        )
+
     today = date.today().isoformat()
     system_message = SystemMessage(content=_SYSTEM_PROMPT_TEMPLATE.format(today=today))
     messages_with_system = [system_message] + list(state["messages"])
@@ -343,9 +381,24 @@ async def reason_node(state: TripPlannerState) -> TripPlannerState:
     budget_exhausted = calls_so_far >= _MAX_TOOL_CALLS
     reasoner = _reasoning_llm if budget_exhausted else _llm_with_tools
 
+    _logger.debug(
+        "followup.reason_context",
+        message_count=len(messages_with_system),
+        budget_exhausted=budget_exhausted,
+        final_message_preview=str(messages_with_system[-1].content)[:200],
+    )
+
     response = await reasoner.ainvoke(messages_with_system)
 
     new_tool_calls = len(response.tool_calls)
+
+    if new_tool_calls:
+        selected_tools = [
+            {"name": call["name"], "args": call["args"]} for call in response.tool_calls
+        ]
+        _logger.info("followup.tools_selected", tools=selected_tools)
+    else:
+        _logger.info("followup.final_answer", calls_so_far=calls_so_far)
 
     return TripPlannerState(
         messages=[response],
@@ -519,8 +572,10 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
     previous = state.get("previous_itinerary")
 
     if previous is not None and scope is not UpdateScope.FULL:
+        _logger.info("followup.format", scope=scope.value, mode="section_only")
         itinerary = await _format_scoped_section(structured_messages, previous, scope)
     else:
+        _logger.info("followup.format", scope=scope.value, mode="full")
         messages_with_instruction = structured_messages + [SystemMessage(content=_FORMAT_PROMPT)]
         itinerary = await _format_complete_itinerary(messages_with_instruction)
         itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
