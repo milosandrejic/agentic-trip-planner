@@ -1,4 +1,5 @@
 from typing import cast
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -8,6 +9,26 @@ def _blank_to_none(value: object) -> object:
     if isinstance(value, str) and not value.strip():
         return None
     return value
+
+
+def _fresh_id(value: object) -> str:
+    """Keep a genuinely assigned UUID, but mint a fresh one for anything else.
+
+    Structured-output schemas mark every field required, so the LLM always emits something for
+    id even though it has a default_factory (which only fires when the field is omitted
+    entirely) — and it has been observed echoing a hotel provider's own id straight through. An
+    id is only trusted when it's already a valid UUID, e.g. one this app assigned on an earlier
+    turn and is now round-tripping through the checkpointer or the database. Anything else
+    (a hallucinated or provider id) is replaced with a fresh one.
+    """
+    if isinstance(value, str):
+        try:
+            UUID(value)
+        except ValueError:
+            pass
+        else:
+            return value
+    return str(uuid4())
 
 
 class Source(BaseModel):
@@ -21,6 +42,11 @@ def _keep_valid_sources(sources: list[Source]) -> list[Source]:
 
 
 class Activity(BaseModel):
+    id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        description="Stable identifier for this activity, used by the frontend to edit, delete, "
+        "reorder, and diff itinerary versions. Never set this yourself.",
+    )
     time: str = Field(description="Time of day, e.g. 'Morning', '09:00'")
     description: str
     duration_hours: float | None = None
@@ -41,6 +67,11 @@ class Activity(BaseModel):
     photo_url: str | None = Field(default=None, description="Representative photo URL, if available.")
     sources: list[Source] = Field(default_factory=lambda: [])
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def _assign_fresh_id(cls, value: object) -> str:
+        return _fresh_id(value)
+
     @field_validator("sources", mode="after")
     @classmethod
     def _drop_invalid_sources(cls, sources: list[Source]) -> list[Source]:
@@ -56,6 +87,11 @@ class DayPlan(BaseModel):
 
 
 class FlightOption(BaseModel):
+    id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        description="Stable identifier for this flight option, used by the frontend to diff "
+        "itinerary versions. Never set this yourself.",
+    )
     airline: str = Field(description="Airline name, e.g. 'British Airways'.")
     stops: int = Field(description="Number of stops (0 = direct).")
     duration_min: int | None = Field(default=None, description="Total flight duration in minutes.")
@@ -65,6 +101,11 @@ class FlightOption(BaseModel):
     return_date: str | None = Field(default=None, description="Return departure date for round trips.")
     booking_url: str | None = Field(default=None, description="Direct booking URL if available.")
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def _assign_fresh_id(cls, value: object) -> str:
+        return _fresh_id(value)
+
     @field_validator("price", "currency", "duration_min", "return_date", "booking_url", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
@@ -72,6 +113,11 @@ class FlightOption(BaseModel):
 
 
 class HotelOption(BaseModel):
+    id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        description="Stable identifier for this hotel option, used by the frontend to diff "
+        "itinerary versions. Never set this yourself.",
+    )
     name: str = Field(description="Hotel name, e.g. 'Hotel Le Marais'.")
     area: str | None = Field(default=None, description="Neighbourhood or address of the hotel.")
     rating: float | None = Field(default=None, description="Star rating, e.g. 4.5.")
@@ -98,6 +144,11 @@ class HotelOption(BaseModel):
                 "is_estimated": True,
             }
         return fields
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _assign_fresh_id(cls, value: object) -> str:
+        return _fresh_id(value)
 
     @field_validator(
         "area", "nightly_price", "total_price", "currency", "booking_url", mode="before"

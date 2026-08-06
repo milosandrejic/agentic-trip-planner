@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from trip_planner.schemas.trips import (
     Activity,
     FlightOption,
@@ -112,3 +114,64 @@ def test_itinerary_drops_sources_without_valid_url() -> None:
         ],
     )
     assert [source.title for source in itinerary.sources] == ["Good"]
+
+
+# --- stable entity ids (item 5) ---
+
+
+def test_activity_gets_a_default_id_when_omitted() -> None:
+    activity = Activity(time="09:00", description="Visit")
+    assert activity.id
+
+
+def test_activity_blank_id_from_structured_output_becomes_fresh_uuid() -> None:
+    activity = Activity.model_validate({"time": "09:00", "description": "Visit", "id": ""})
+    assert activity.id
+
+
+def test_activity_supplied_non_uuid_id_is_never_trusted() -> None:
+    activity = Activity.model_validate(
+        {"id": "activity-1", "time": "09:00", "description": "Visit"}
+    )
+    assert activity.id != "activity-1"
+
+
+def test_activity_supplied_uuid_id_is_preserved() -> None:
+    """A valid UUID round-tripping through the checkpointer or the database must stay stable."""
+    stable_id = str(uuid4())
+    activity = Activity.model_validate(
+        {"id": stable_id, "time": "09:00", "description": "Visit"}
+    )
+    assert activity.id == stable_id
+
+
+def test_flight_blank_id_from_structured_output_becomes_fresh_uuid() -> None:
+    flight = FlightOption.model_validate(
+        {"id": "", "airline": "BA", "stops": 0, "outbound_date": "2026-09-01"}
+    )
+    assert flight.id
+
+
+def test_flight_supplied_uuid_id_is_preserved() -> None:
+    stable_id = str(uuid4())
+    flight = FlightOption.model_validate(
+        {"id": stable_id, "airline": "BA", "stops": 0, "outbound_date": "2026-09-01"}
+    )
+    assert flight.id == stable_id
+
+
+def test_hotel_supplied_non_uuid_id_is_never_trusted() -> None:
+    hotel = HotelOption.model_validate({"id": "lp65564085", "name": "Hotel Roma"})
+    assert hotel.id != "lp65564085"
+
+
+def test_hotel_supplied_uuid_id_is_preserved() -> None:
+    stable_id = str(uuid4())
+    hotel = HotelOption.model_validate({"id": stable_id, "name": "Hotel Roma"})
+    assert hotel.id == stable_id
+
+
+def test_activity_ids_are_unique_across_instances() -> None:
+    first = Activity(time="09:00", description="Visit")
+    second = Activity(time="10:00", description="Wander")
+    assert first.id != second.id
