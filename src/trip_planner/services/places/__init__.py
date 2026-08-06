@@ -1,3 +1,4 @@
+from trip_planner.services.places.enrichment import enrich_activities
 from trip_planner.services.places.google_places_provider import GooglePlacesProvider
 from trip_planner.services.places.provider import (
     NearbyPlacesQuery,
@@ -13,6 +14,7 @@ __all__ = [
     "PlaceProvider",
     "PlaceSearchQuery",
     "ProviderPlace",
+    "enrich_activities",
     "rank_by_name_match",
     "rank_by_quality",
 ]

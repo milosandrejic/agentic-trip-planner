@@ -1,5 +1,6 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false
 import asyncio
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,27 @@ from trip_planner.agents.graph import (
 from trip_planner.agents.state import TripPlannerState, UpdateScope
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import Activity, DayPlan, FlightOption, HotelOption, Itinerary
+from trip_planner.services.places.provider import PlaceProvider
 from trip_planner.services.types import FlightOffer, FlightSearchResult, ToolResult
+
+
+def _pass_through_activities(
+    activities: list[Activity], destination: str, provider: PlaceProvider
+) -> list[Activity]:
+    """Stand-in enrichment side_effect that leaves activities untouched."""
+    return activities
+
+
+@pytest.fixture(autouse=True)
+def _skip_place_enrichment() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Format-node tests exercise formatting, not the place-enrichment pass — pass activities
+    through unchanged by default so they never make a real provider call. Enrichment itself is
+    covered by its own tests further down and by tests/services/places/test_enrichment.py."""
+    with patch(
+        "trip_planner.agents.graph.enrich_activities",
+        new=AsyncMock(side_effect=_pass_through_activities),
+    ):
+        yield
 
 
 def _make_state(messages: list[object]) -> TripPlannerState:
@@ -536,6 +557,104 @@ async def test_format_node_itinerary_scope_falls_back_to_previous_when_empty() -
     itinerary = result.get("current_itinerary")
     assert itinerary is not None
     assert itinerary.days == previous.days
+
+
+# --- format_node place enrichment ---
+
+
+async def test_format_node_full_scope_enriches_every_day() -> None:
+    itinerary = _make_multi_day_itinerary(2, 2)
+    state = _make_state([AIMessage(content="Here is your itinerary.")])
+
+    with (
+        patch("trip_planner.agents.graph._llm_structured") as mock_llm,
+        patch(
+            "trip_planner.agents.graph.enrich_activities", new_callable=AsyncMock
+        ) as mock_enrich,
+    ):
+        mock_llm.ainvoke = AsyncMock(return_value=itinerary)
+        mock_enrich.side_effect = _pass_through_activities
+        await format_node(state)
+
+    assert mock_enrich.await_count == 2
+    for call in mock_enrich.await_args_list:
+        assert call.args[1] == "Paris"
+        assert call.args[2] is graph_module._places_provider
+
+
+async def test_format_node_itinerary_scope_enriches_new_days() -> None:
+    previous = _make_itinerary()
+    new_days = _make_multi_day_itinerary(2, 2)
+    days_only = graph_module._DaysOnly(total_days=2, days=new_days.days)
+    state = _make_state([AIMessage(content="Extend the trip.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.ITINERARY
+
+    with (
+        patch("trip_planner.agents.graph._llm_days_only") as mock_days,
+        patch(
+            "trip_planner.agents.graph.enrich_activities", new_callable=AsyncMock
+        ) as mock_enrich,
+    ):
+        mock_days.ainvoke = AsyncMock(return_value=days_only)
+        mock_enrich.side_effect = _pass_through_activities
+        await format_node(state)
+
+    assert mock_enrich.await_count == 2
+
+
+async def test_format_node_hotels_scope_skips_enrichment() -> None:
+    previous = _make_multi_day_itinerary(2, 2).model_copy(
+        update={"hotels": [_make_hotel("Old Hotel")]}
+    )
+    hotels_only = graph_module._HotelsOnly(hotels=[_make_hotel("New Hotel")])
+    state = _make_state([AIMessage(content="Swapped the hotel.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.HOTELS
+
+    with (
+        patch("trip_planner.agents.graph._llm_hotels_only") as mock_hotels,
+        patch(
+            "trip_planner.agents.graph.enrich_activities", new_callable=AsyncMock
+        ) as mock_enrich,
+    ):
+        mock_hotels.ainvoke = AsyncMock(return_value=hotels_only)
+        await format_node(state)
+
+    mock_enrich.assert_not_awaited()
+
+
+async def test_format_node_flights_scope_skips_enrichment() -> None:
+    previous = _make_multi_day_itinerary(2, 2).model_copy(
+        update={"flights": [_make_flight("Old Air")]}
+    )
+    flights_only = graph_module._FlightsOnly(flights=[_make_flight("New Air")])
+    state = _make_state([AIMessage(content="Swapped the flight.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.FLIGHTS
+
+    with (
+        patch("trip_planner.agents.graph._llm_flights_only") as mock_flights,
+        patch(
+            "trip_planner.agents.graph.enrich_activities", new_callable=AsyncMock
+        ) as mock_enrich,
+    ):
+        mock_flights.ainvoke = AsyncMock(return_value=flights_only)
+        await format_node(state)
+
+    mock_enrich.assert_not_awaited()
+
+
+async def test_enrich_itinerary_days_skips_provider_when_itinerary_has_no_days() -> None:
+    empty_itinerary = _make_itinerary().model_copy(update={"days": []})
+
+    with patch(
+        "trip_planner.agents.graph.enrich_activities", new_callable=AsyncMock
+    ) as mock_enrich:
+        result = await graph_module._enrich_itinerary_days(empty_itinerary)
+
+    mock_enrich.assert_not_awaited()
+    assert result == empty_itinerary
 
 
 # --- _route_after_triage ---

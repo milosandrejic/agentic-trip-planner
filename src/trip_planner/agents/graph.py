@@ -19,6 +19,7 @@ from trip_planner.config import get_settings
 from trip_planner.logging_config import get_logger
 from trip_planner.schemas.clarification import ClarificationRequest
 from trip_planner.schemas.trips import DayPlan, FlightOption, HotelOption, Itinerary
+from trip_planner.services.places import GooglePlacesProvider, PlaceProvider, enrich_activities
 from trip_planner.services.types import ToolResult
 from trip_planner.tools.discover_places import discover_places_tool
 from trip_planner.tools.find_place_by_name import find_place_by_name_tool
@@ -39,6 +40,10 @@ _TOOLS = [
     find_place_by_name_tool,
     place_details_tool,
 ]
+
+# Used only by the post-generation enrichment pass (see _enrich_itinerary_days), not by the
+# reasoner, which talks to Google Places exclusively through the tools above.
+_places_provider: PlaceProvider = GooglePlacesProvider()
 
 _TRIAGE_PROMPT_TEMPLATE = (
     "Today is {today}. "
@@ -562,12 +567,37 @@ async def _format_scoped_section(
     return previous.model_copy(update={"days": days_only.days, "total_days": days_only.total_days})
 
 
+async def _enrich_itinerary_days(itinerary: Itinerary) -> Itinerary:
+    """Give every day's activities one automatic backfill pass before returning the itinerary.
+
+    Only called for sections that were just (re)generated — a day plan the formatter produced
+    this turn, never a day plan carried forward untouched from a hotels/flights-only follow-up.
+    """
+    if not itinerary.days:
+        return itinerary
+
+    enriched_activity_lists = await asyncio.gather(
+        *(
+            enrich_activities(day.activities, itinerary.destination, _places_provider)
+            for day in itinerary.days
+        )
+    )
+    enriched_days = [
+        day.model_copy(update={"activities": activities})
+        for day, activities in zip(itinerary.days, enriched_activity_lists, strict=True)
+    ]
+    return itinerary.model_copy(update={"days": enriched_days})
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Produce this turn's itinerary.
 
     A brand-new trip (or a change touching several sections) formats the whole itinerary. A
     scoped follow-up on an existing itinerary instead formats and splices only the section the
-    user asked to change (see _format_scoped_section), leaving the rest exactly as it was.
+    user asked to change (see _format_scoped_section), leaving the rest exactly as it was. Only
+    the day plan a section actually (re)generated this turn is passed through the automatic
+    place-metadata enrichment pass (see _enrich_itinerary_days); a hotels- or flights-only
+    follow-up carries its previous day plan forward untouched, so it is never re-enriched.
     """
     conversation = list(state["messages"])
     structured_messages = _with_structured_tool_results(conversation)
@@ -578,11 +608,14 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
     if previous is not None and scope is not UpdateScope.FULL:
         _logger.info("followup.format", scope=scope.value, mode="section_only")
         itinerary = await _format_scoped_section(structured_messages, previous, scope)
+        if scope is UpdateScope.ITINERARY:
+            itinerary = await _enrich_itinerary_days(itinerary)
     else:
         _logger.info("followup.format", scope=scope.value, mode="full")
         messages_with_instruction = structured_messages + [SystemMessage(content=_FORMAT_PROMPT)]
         itinerary = await _format_complete_itinerary(messages_with_instruction)
         itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
+        itinerary = await _enrich_itinerary_days(itinerary)
 
     return TripPlannerState(
         messages=[],
