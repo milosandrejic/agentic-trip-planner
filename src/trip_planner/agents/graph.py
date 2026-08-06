@@ -595,6 +595,33 @@ async def _enrich_itinerary_days(itinerary: Itinerary) -> Itinerary:
     return itinerary.model_copy(update={"days": enriched_days})
 
 
+def _log_missing_metadata(itinerary: Itinerary) -> None:
+    """Debug-log counts of activities/hotels/flights still missing expected metadata.
+
+    Best-effort enrichment and the providers themselves don't always have every field, so gaps
+    are expected; this only gives visibility into how often they occur, it never blocks or
+    changes the itinerary.
+    """
+    activities = [activity for day in itinerary.days for activity in day.activities]
+    missing_photo = sum(1 for activity in activities if activity.photo_url is None)
+    missing_rating = sum(1 for activity in activities if activity.rating is None)
+    missing_opening_hours = sum(1 for activity in activities if not activity.opening_hours)
+    missing_hotel_booking_url = sum(1 for hotel in itinerary.hotels if hotel.booking_url is None)
+    missing_flight_duration = sum(1 for flight in itinerary.flights if flight.duration_min is None)
+
+    _logger.debug(
+        "followup.missing_metadata",
+        activities_total=len(activities),
+        activities_missing_photo=missing_photo,
+        activities_missing_rating=missing_rating,
+        activities_missing_opening_hours=missing_opening_hours,
+        hotels_total=len(itinerary.hotels),
+        hotels_missing_booking_url=missing_hotel_booking_url,
+        flights_total=len(itinerary.flights),
+        flights_missing_duration=missing_flight_duration,
+    )
+
+
 async def format_node(state: TripPlannerState) -> TripPlannerState:
     """Produce this turn's itinerary.
 
@@ -622,6 +649,8 @@ async def format_node(state: TripPlannerState) -> TripPlannerState:
         itinerary = await _format_complete_itinerary(messages_with_instruction)
         itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
         itinerary = await _enrich_itinerary_days(itinerary)
+
+    _log_missing_metadata(itinerary)
 
     return TripPlannerState(
         messages=[],

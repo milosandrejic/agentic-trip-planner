@@ -657,6 +657,76 @@ async def test_enrich_itinerary_days_skips_provider_when_itinerary_has_no_days()
     assert result == empty_itinerary
 
 
+# --- _log_missing_metadata ---
+
+
+def test_log_missing_metadata_counts_gaps_across_entities() -> None:
+    itinerary = _make_multi_day_itinerary(1, 1).model_copy(
+        update={
+            "hotels": [_make_hotel()],
+            "flights": [_make_flight()],
+        }
+    )
+
+    with patch("trip_planner.agents.graph._logger") as mock_logger:
+        graph_module._log_missing_metadata(itinerary)
+
+    call = next(
+        call
+        for call in mock_logger.debug.call_args_list
+        if call.args and call.args[0] == "followup.missing_metadata"
+    )
+    assert call.kwargs["activities_total"] == 1
+    assert call.kwargs["activities_missing_photo"] == 1
+    assert call.kwargs["activities_missing_rating"] == 1
+    assert call.kwargs["activities_missing_opening_hours"] == 1
+    assert call.kwargs["hotels_total"] == 1
+    assert call.kwargs["hotels_missing_booking_url"] == 1
+    assert call.kwargs["flights_total"] == 1
+    assert call.kwargs["flights_missing_duration"] == 0
+
+
+def test_log_missing_metadata_reports_zero_gaps_when_fully_populated() -> None:
+    activity = Activity(
+        time="Morning",
+        description="Visit the Louvre",
+        rating=4.7,
+        photo_url="https://example.com/photo.jpg",
+        opening_hours=["Mon-Fri 09:00-18:00"],
+    )
+    day = DayPlan(day=1, location="Paris", activities=[activity])
+    itinerary = Itinerary(destination="Paris", total_days=1, summary="A trip.", days=[day])
+
+    with patch("trip_planner.agents.graph._logger") as mock_logger:
+        graph_module._log_missing_metadata(itinerary)
+
+    call = next(
+        call
+        for call in mock_logger.debug.call_args_list
+        if call.args and call.args[0] == "followup.missing_metadata"
+    )
+    assert call.kwargs["activities_missing_photo"] == 0
+    assert call.kwargs["activities_missing_rating"] == 0
+    assert call.kwargs["activities_missing_opening_hours"] == 0
+
+
+async def test_format_node_logs_missing_metadata() -> None:
+    itinerary = _make_itinerary()
+    state = _make_state([AIMessage(content="Here is your itinerary.")])
+
+    with (
+        patch("trip_planner.agents.graph._llm_structured") as mock_llm,
+        patch("trip_planner.agents.graph._logger") as mock_logger,
+    ):
+        mock_llm.ainvoke = AsyncMock(return_value=itinerary)
+        await format_node(state)
+
+    assert any(
+        call.args and call.args[0] == "followup.missing_metadata"
+        for call in mock_logger.debug.call_args_list
+    )
+
+
 # --- _route_after_triage ---
 
 
