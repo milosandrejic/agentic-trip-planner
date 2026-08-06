@@ -162,6 +162,58 @@ async def test_reason_node_drops_tools_once_budget_is_exhausted() -> None:
     assert result.get("tool_call_count") == _MAX_TOOL_CALLS
 
 
+async def test_reason_node_injects_hotel_constraint_reminder_when_price_set() -> None:
+    ai_response = AIMessage(content="")
+    state = TripPlannerState(
+        messages=[HumanMessage(content="cheaper hotels please")],
+        trip_request="cheaper hotels please",
+        hotel_max_nightly_price=150.0,
+    )
+
+    with patch("trip_planner.agents.graph._llm_with_tools") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=ai_response)
+        await reason_node(state)
+
+    await_args = mock_llm.ainvoke.await_args
+    assert await_args is not None
+    sent_messages = await_args.args[0]
+    reminder = sent_messages[-1]
+    assert "max_nightly_price=150.0" in reminder.content
+
+
+async def test_reason_node_injects_hotel_constraint_reminder_when_stars_set() -> None:
+    ai_response = AIMessage(content="")
+    state = TripPlannerState(
+        messages=[HumanMessage(content="3 or 4-star hotels please")],
+        trip_request="3 or 4-star hotels please",
+        hotel_min_star_rating=3.0,
+    )
+
+    with patch("trip_planner.agents.graph._llm_with_tools") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=ai_response)
+        await reason_node(state)
+
+    await_args = mock_llm.ainvoke.await_args
+    assert await_args is not None
+    sent_messages = await_args.args[0]
+    reminder = sent_messages[-1]
+    assert "min_star_rating=3.0" in reminder.content
+
+
+async def test_reason_node_omits_hotel_constraint_reminder_when_unset() -> None:
+    ai_response = AIMessage(content="")
+    state = _make_state([HumanMessage(content="Paris 7 days")])
+
+    with patch("trip_planner.agents.graph._llm_with_tools") as mock_llm:
+        mock_llm.ainvoke = AsyncMock(return_value=ai_response)
+        await reason_node(state)
+
+    await_args = mock_llm.ainvoke.await_args
+    assert await_args is not None
+    sent_messages = await_args.args[0]
+    assert not any("hotel_search_tool" in getattr(m, "content", "") for m in sent_messages)
+
+
 # --- format_node ---
 
 
@@ -612,6 +664,51 @@ async def test_triage_node_ignores_scope_without_existing_itinerary() -> None:
         result = await triage_node(state)
 
     assert result.get("update_scope") is UpdateScope.FULL
+
+
+async def test_triage_node_carries_hotel_constraints_into_state() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    decision = _TriageDecision(
+        intent=_TriageIntent.ITINERARY_MODIFICATION,
+        should_clarify=False,
+        clarification=None,
+        update_scope=UpdateScope.HOTELS,
+        hotel_max_nightly_price=150.0,
+        hotel_min_star_rating=3.0,
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="cheaper 3-star hotels")],
+        trip_request="cheaper 3-star hotels",
+        current_itinerary=_make_itinerary(),
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("hotel_max_nightly_price") == 150.0
+    assert result.get("hotel_min_star_rating") == 3.0
+
+
+async def test_triage_node_resets_hotel_constraints_when_not_mentioned() -> None:
+    from trip_planner.agents.graph import _TriageDecision, _TriageIntent
+
+    decision = _TriageDecision(
+        intent=_TriageIntent.ITINERARY_MODIFICATION, should_clarify=False, clarification=None
+    )
+    state = TripPlannerState(
+        messages=[HumanMessage(content="add a day trip to Versailles")],
+        trip_request="add a day trip to Versailles",
+        current_itinerary=_make_itinerary(),
+        hotel_max_nightly_price=150.0,
+    )
+
+    with patch("trip_planner.agents.graph._llm_triage") as mock_triage:
+        mock_triage.ainvoke = AsyncMock(return_value=decision)
+        result = await triage_node(state)
+
+    assert result.get("hotel_max_nightly_price") is None
 
 
 async def test_triage_node_lets_clarification_answers_proceed_without_reclarifying() -> None:

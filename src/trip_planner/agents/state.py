@@ -29,4 +29,6 @@ class TripPlannerState(TypedDict):
     current_itinerary: NotRequired[Itinerary | None]
     previous_itinerary: NotRequired[Itinerary | None]
     update_scope: NotRequired[UpdateScope]
+    hotel_max_nightly_price: NotRequired[float | None]
+    hotel_min_star_rating: NotRequired[float | None]
     pending_clarification: NotRequired[ClarificationRequest | None]

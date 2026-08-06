@@ -61,7 +61,12 @@ _TRIAGE_PROMPT_TEMPLATE = (
     "For an itinerary_modification, also set update_scope to the narrowest section the user wants "
     "changed: 'flights' when only flights change, 'hotels' when only hotels change, 'itinerary' when "
     "only the day-by-day plan (days or activities) changes. Use 'full' for a brand-new trip or a "
-    "change that touches several sections at once. For every other intent, leave update_scope as 'full'."
+    "change that touches several sections at once. For every other intent, leave update_scope as 'full'. "
+    "Also extract hotel_max_nightly_price and hotel_min_star_rating whenever the user's message implies "
+    "a hotel price or quality constraint, whether for a new trip or a modification. Look back through "
+    "the conversation's prior hotel search results for concrete prices to ground a relative request "
+    "like 'cheaper' or 'budget-friendly' in an actual number; leave both null when hotels are not "
+    "mentioned or no constraint is implied."
 )
 
 _SYSTEM_PROMPT_TEMPLATE = (
@@ -162,6 +167,22 @@ class _TriageDecision(BaseModel):
             "or 'itinerary' (day-by-day plan). 'full' for a new trip or a broad, multi-section change."
         ),
     )
+    hotel_max_nightly_price: float | None = Field(
+        default=None,
+        description=(
+            "Set only when the user requests cheaper, budget, or a specific price ceiling for "
+            "hotels. Infer a concrete number from the conversation (e.g. below the cheapest hotel "
+            "nightly price already shown) when the user is relative ('cheaper') rather than exact. "
+            "Null when the user did not mention hotel price."
+        ),
+    )
+    hotel_min_star_rating: float | None = Field(
+        default=None,
+        description=(
+            "Set only when the user requests a star-rating floor for hotels, e.g. 3 for '3-star or "
+            "better', or 3 for '3 or 4-star'. Null when the user did not mention hotel star rating."
+        ),
+    )
 
 
 _llm_triage = _triage_llm.with_structured_output(_TriageDecision)
@@ -223,7 +244,30 @@ async def triage_node(state: TripPlannerState) -> TripPlannerState:
         current_itinerary=None,
         previous_itinerary=state.get("current_itinerary"),
         update_scope=update_scope,
+        hotel_max_nightly_price=decision.hotel_max_nightly_price,
+        hotel_min_star_rating=decision.hotel_min_star_rating,
         pending_clarification=clarification,
+    )
+
+
+def _hotel_constraint_reminder(max_nightly_price: float | None, min_star_rating: float | None) -> SystemMessage:
+    """Force hotel_search_tool to receive the constraints extracted from the user's request.
+
+    Triage extracts price/rating constraints deterministically; without this explicit
+    instruction the reasoning LLM tends to repeat the previous, unconstrained tool call.
+    """
+    constraints: list[str] = []
+    if max_nightly_price is not None:
+        constraints.append(f"max_nightly_price={max_nightly_price}")
+    if min_star_rating is not None:
+        constraints.append(f"min_star_rating={min_star_rating}")
+
+    return SystemMessage(
+        content=(
+            "When calling hotel_search_tool this turn, you MUST set "
+            f"{' and '.join(constraints)} exactly as given, so the search reflects the user's "
+            "latest request instead of repeating the previous, unconstrained search."
+        )
     )
 
 
@@ -236,6 +280,13 @@ async def reason_node(state: TripPlannerState) -> TripPlannerState:
     today = date.today().isoformat()
     system_message = SystemMessage(content=_SYSTEM_PROMPT_TEMPLATE.format(today=today))
     messages_with_system = [system_message] + list(state["messages"])
+
+    max_nightly_price = state.get("hotel_max_nightly_price")
+    min_star_rating = state.get("hotel_min_star_rating")
+    if max_nightly_price is not None or min_star_rating is not None:
+        messages_with_system.append(
+            _hotel_constraint_reminder(max_nightly_price, min_star_rating)
+        )
 
     calls_so_far = state.get("tool_call_count", 0)
     budget_exhausted = calls_so_far >= _MAX_TOOL_CALLS
