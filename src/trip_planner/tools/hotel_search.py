@@ -81,6 +81,7 @@ def _to_hotel_result(hotel: ProviderHotel) -> HotelResult:
         latitude=hotel.latitude,
         longitude=hotel.longitude,
         booking_url=hotel.booking_url,
+        photo_url=hotel.photo_url,
     )
 
 

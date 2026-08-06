@@ -73,6 +73,7 @@ def _to_provider_hotel(
         currency=currency,
         latitude=hotel.get("latitude"),
         longitude=hotel.get("longitude"),
+        photo_url=hotel.get("main_photo") or None,
     )
 
 

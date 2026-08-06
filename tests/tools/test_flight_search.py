@@ -9,6 +9,7 @@ from trip_planner.services.types import ToolStatus
 from trip_planner.tools.flight_search import (
     _build_offer_request,
     _format_offers,
+    _parse_duration_minutes,
     flight_search_tool,
 )
 
@@ -103,6 +104,33 @@ def test_format_offers_caps_at_max_three_results() -> None:
     assert result.count("Option") == 3
 
 
+# --- _parse_duration_minutes ---
+
+
+def test_parse_duration_minutes_handles_hours_and_minutes() -> None:
+    assert _parse_duration_minutes("PT1H15M") == 75
+
+
+def test_parse_duration_minutes_handles_minutes_only() -> None:
+    assert _parse_duration_minutes("PT45M") == 45
+
+
+def test_parse_duration_minutes_handles_hours_only() -> None:
+    assert _parse_duration_minutes("PT2H") == 120
+
+
+def test_parse_duration_minutes_handles_days() -> None:
+    assert _parse_duration_minutes("P1DT2H30M") == 1590
+
+
+def test_parse_duration_minutes_returns_none_for_blank_string() -> None:
+    assert _parse_duration_minutes("") is None
+
+
+def test_parse_duration_minutes_returns_none_for_unparseable_string() -> None:
+    assert _parse_duration_minutes("not-a-duration") is None
+
+
 # --- flight_search_tool ---
 
 
@@ -190,6 +218,8 @@ async def test_flight_search_tool_success_envelope_carries_typed_offers() -> Non
     assert result.latency_ms is not None
     assert result.data is not None
     assert len(result.data.offers) == 2
+    assert result.data.offers[0].duration_min == 75
+    assert result.data.offers[1].duration_min == 80
 
 
 async def test_flight_search_tool_empty_envelope_when_no_offers() -> None:

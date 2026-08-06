@@ -1,4 +1,5 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+import re
 import time
 from typing import Any
 
@@ -16,6 +17,11 @@ _PROVIDER = "duffel"
 
 _client = DuffelClient()
 _converter = CurrencyConverter()
+
+_ISO8601_DURATION_RE = re.compile(
+    r"^P(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
+)
 
 
 class _FlightSearchInput(BaseModel):
@@ -95,6 +101,20 @@ async def _convert_offer_currencies(
     return normalized
 
 
+def _parse_duration_minutes(duration: str) -> int | None:
+    """Parse an ISO 8601 duration (e.g. 'PT9H5M') into whole minutes, or None if unparseable."""
+    match = _ISO8601_DURATION_RE.match(duration)
+    if not match:
+        return None
+
+    days = int(match.group("days") or 0)
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    seconds = float(match.group("seconds") or 0)
+
+    return round(days * 24 * 60 + hours * 60 + minutes + seconds / 60)
+
+
 def _format_offers(offers: list[dict[str, Any]]) -> str:
     """Format the top flight offers into a human-readable summary for the LLM."""
     if not offers:
@@ -149,6 +169,7 @@ def _build_flight_payload(
                 currency=offer.get("total_currency", ""),
                 outbound_date=departure_date,
                 return_date=return_date,
+                duration_min=_parse_duration_minutes(first_slice.get("duration", "")),
             )
         )
 

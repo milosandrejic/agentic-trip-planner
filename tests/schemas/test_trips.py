@@ -151,6 +151,48 @@ def test_itinerary_drops_sources_without_valid_url() -> None:
     assert [source.title for source in itinerary.sources] == ["Good"]
 
 
+# --- per-entity sources on hotels and flights (Commit 5) ---
+
+
+def test_hotel_option_sources_default_to_empty() -> None:
+    hotel = HotelOption(name="Hotel Roma")
+    assert hotel.sources == []
+
+
+def test_hotel_option_drops_sources_without_valid_url() -> None:
+    hotel = HotelOption(
+        name="Hotel Roma",
+        sources=[
+            Source(title="Good", url="https://example.com/a"),
+            Source(title="Bad", url=""),
+        ],
+    )
+    assert [source.title for source in hotel.sources] == ["Good"]
+
+
+def test_hotel_option_photo_url_defaults_to_none() -> None:
+    hotel = HotelOption(name="Hotel Roma")
+    assert hotel.photo_url is None
+
+
+def test_flight_option_sources_default_to_empty() -> None:
+    flight = FlightOption(airline="BA", stops=0, outbound_date="2026-09-01")
+    assert flight.sources == []
+
+
+def test_flight_option_drops_sources_without_valid_url() -> None:
+    flight = FlightOption(
+        airline="BA",
+        stops=0,
+        outbound_date="2026-09-01",
+        sources=[
+            Source(title="Good", url="https://example.com/a"),
+            Source(title="Bad", url="not-a-url"),
+        ],
+    )
+    assert [source.title for source in flight.sources] == ["Good"]
+
+
 # --- stable entity ids (item 5) ---
 
 

@@ -113,6 +113,7 @@ class FlightOption(BaseModel):
     outbound_date: str = Field(description="Outbound departure date in ISO format.")
     return_date: str | None = Field(default=None, description="Return departure date for round trips.")
     booking_url: str | None = Field(default=None, description="Direct booking URL if available.")
+    sources: list[Source] = Field(default_factory=lambda: [])
 
     @field_validator("id", mode="before")
     @classmethod
@@ -123,6 +124,11 @@ class FlightOption(BaseModel):
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return _blank_to_none(value)
+
+    @field_validator("sources", mode="after")
+    @classmethod
+    def _drop_invalid_sources(cls, sources: list[Source]) -> list[Source]:
+        return _keep_valid_sources(sources)
 
 
 class HotelOption(BaseModel):
@@ -141,6 +147,8 @@ class HotelOption(BaseModel):
     latitude: float | None = Field(default=None, description="Latitude of the hotel.")
     longitude: float | None = Field(default=None, description="Longitude of the hotel.")
     booking_url: str | None = Field(default=None, description="Direct booking URL if available.")
+    photo_url: str | None = Field(default=None, description="Representative photo URL, if available.")
+    sources: list[Source] = Field(default_factory=lambda: [])
 
     @model_validator(mode="before")
     @classmethod
@@ -169,6 +177,11 @@ class HotelOption(BaseModel):
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return _blank_to_none(value)
+
+    @field_validator("sources", mode="after")
+    @classmethod
+    def _drop_invalid_sources(cls, sources: list[Source]) -> list[Source]:
+        return _keep_valid_sources(sources)
 
 
 class Itinerary(BaseModel):

@@ -20,6 +20,7 @@ _HOTELS_RESPONSE: dict[str, Any] = {
             "address": "12 Rue de Rivoli",
             "latitude": 48.85,
             "longitude": 2.36,
+            "main_photo": "https://example.com/lp1.jpg",
         },
         {
             "id": "lp2",
@@ -112,6 +113,18 @@ async def test_search_maps_hotels_and_nightly_prices() -> None:
     assert first.nightly_price == 95.0  # 380 over 4 nights
     assert first.currency == "EUR"
     assert first.latitude == 48.85
+    assert first.photo_url == "https://example.com/lp1.jpg"
+
+
+async def test_search_maps_missing_photo_to_none() -> None:
+    client = AsyncMock()
+    client.get.return_value = _HOTELS_RESPONSE
+    client.post.return_value = _RATES_RESPONSE
+    provider = LiteApiHotelProvider(client=client)
+
+    hotels = await provider.search(_query())
+
+    assert hotels[1].photo_url is None
 
 
 async def test_search_returns_empty_when_no_hotels() -> None:

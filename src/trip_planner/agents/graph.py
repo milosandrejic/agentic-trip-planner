@@ -108,7 +108,9 @@ _FORMAT_PROMPT = (
     "user_rating_count, opening_hours, price_level, ticket_url, website_url, phone, business_status, "
     "categories, editorial_summary, google_maps_url) whenever the places tools provided that data; "
     "never invent a value the tools did not return, leave it null instead. "
-    "Include all sources discussed. "
+    "Include all sources discussed in the itinerary's sources field, and also attach the specific "
+    "source(s) that informed each activity, hotel, and flight to that entity's own sources field "
+    "whenever one is identifiable; leave an entity's sources empty rather than guessing. "
     "Do not truncate or summarise days — output the full itinerary. "
     "The summary field must describe the trip itself (destination highlights, pace, what the days "
     "cover) in 2-4 sentences. Never mention prices, tool or provider names, or search/API details in "
@@ -121,13 +123,15 @@ _FORMAT_PROMPT = (
 _HOTELS_FORMAT_PROMPT = (
     "Based on the trip planning conversation above, extract ONLY the hotel options returned by "
     "the hotel_search tool. Populate the hotels field with every hotel option found; do not invent "
-    "hotels the tool did not return."
+    "hotels the tool did not return. Attach each hotel's own sources field whenever one is "
+    "identifiable; leave it empty rather than guessing."
 )
 
 _FLIGHTS_FORMAT_PROMPT = (
     "Based on the trip planning conversation above, extract ONLY the flight options returned by "
     "the flight_search tool. Populate the flights field with every flight option found; do not "
-    "invent flights the tool did not return."
+    "invent flights the tool did not return. Attach each flight's own sources field whenever one is "
+    "identifiable; leave it empty rather than guessing."
 )
 
 _DAYS_FORMAT_PROMPT = (
@@ -138,6 +142,8 @@ _DAYS_FORMAT_PROMPT = (
     "address, rating, user_rating_count, opening_hours, price_level, ticket_url, website_url, phone, "
     "business_status, categories, editorial_summary, google_maps_url) whenever the places tools "
     "provided that data; never invent a value the tools did not return, leave it null instead. "
+    "Attach each activity's own sources field whenever one is identifiable; leave it empty rather "
+    "than guessing. "
     "Do not truncate or summarise days — output the full day-by-day plan."
 )
 

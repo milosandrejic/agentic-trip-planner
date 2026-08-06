@@ -118,6 +118,7 @@ def test_hotel_search_result_preserves_coordinates() -> None:
         currency="USD",
         latitude=48.8566,
         longitude=2.3522,
+        photo_url="https://example.com/lp9.jpg",
     )
     payload = HotelSearchResult(
         city="Paris",
@@ -131,6 +132,7 @@ def test_hotel_search_result_preserves_coordinates() -> None:
     assert payload.hotels[0].hotel_id == "lp_9"
     assert payload.hotels[0].latitude == 48.8566
     assert payload.hotels[0].rating is None
+    assert payload.hotels[0].photo_url == "https://example.com/lp9.jpg"
 
 
 def test_weather_result_holds_daily_values() -> None:

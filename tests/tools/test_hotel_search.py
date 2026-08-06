@@ -19,6 +19,7 @@ _HOTELS_RESPONSE: dict[str, Any] = {
             "stars": 4,
             "rating": 8.6,
             "address": "12 Rue de Rivoli",
+            "main_photo": "https://example.com/lp1.jpg",
         },
         {
             "id": "lp2",
@@ -185,6 +186,8 @@ async def test_hotel_search_tool_success_envelope_carries_typed_hotels() -> None
     assert result.latency_ms is not None
     assert result.data is not None
     assert len(result.data.hotels) == 2
+    assert result.data.hotels[0].photo_url == "https://example.com/lp1.jpg"
+    assert result.data.hotels[1].photo_url is None
 
 
 async def test_hotel_search_tool_empty_envelope_when_no_hotels() -> None:

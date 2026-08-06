@@ -153,6 +153,7 @@ class HotelResult(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     booking_url: str | None = None
+    photo_url: str | None = None
 
 
 class HotelSearchResult(BaseModel):
