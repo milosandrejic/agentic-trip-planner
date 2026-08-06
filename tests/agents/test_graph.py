@@ -9,7 +9,6 @@ import trip_planner.agents.graph as graph_module
 from trip_planner.agents.graph import (
     PlannerOutcome,
     _dedupe_flights,
-    _merge_itinerary,
     _route_after_reason,
     _route_after_triage,
     format_node,
@@ -365,21 +364,23 @@ async def test_format_node_keeps_fullest_itinerary_after_max_attempts() -> None:
     assert mock_llm.ainvoke.await_count == 3
 
 
-async def test_format_node_hotels_scope_keeps_previous_days_and_flights() -> None:
+async def test_format_node_hotels_scope_formats_only_hotels_section() -> None:
     previous = _make_multi_day_itinerary(3, 3).model_copy(
         update={"flights": [_make_flight()], "hotels": [_make_hotel("Old Hotel")]}
     )
-    regenerated = _make_multi_day_itinerary(1, 3).model_copy(
-        update={"flights": [], "hotels": [_make_hotel("New Hotel")]}
-    )
+    hotels_only = graph_module._HotelsOnly(hotels=[_make_hotel("New Hotel")])
     state = _make_state([AIMessage(content="Swapped the hotel.")])
     state["previous_itinerary"] = previous
     state["update_scope"] = UpdateScope.HOTELS
 
-    with patch("trip_planner.agents.graph._llm_structured") as mock_llm:
-        mock_llm.ainvoke = AsyncMock(return_value=regenerated)
+    with (
+        patch("trip_planner.agents.graph._llm_hotels_only") as mock_hotels,
+        patch("trip_planner.agents.graph._llm_structured") as mock_full,
+    ):
+        mock_hotels.ainvoke = AsyncMock(return_value=hotels_only)
         result = await format_node(state)
 
+    mock_full.ainvoke.assert_not_called()
     itinerary = result.get("current_itinerary")
     assert itinerary is not None
     assert len(itinerary.days) == 3
@@ -387,70 +388,120 @@ async def test_format_node_hotels_scope_keeps_previous_days_and_flights() -> Non
     assert [flight.airline for flight in itinerary.flights] == ["British Airways"]
 
 
-# --- _merge_itinerary ---
+async def test_format_node_hotels_scope_falls_back_to_previous_when_empty() -> None:
+    previous = _make_itinerary().model_copy(update={"hotels": [_make_hotel("Stay")]})
+    state = _make_state([AIMessage(content="Swapped the hotel.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.HOTELS
+
+    with patch("trip_planner.agents.graph._llm_hotels_only") as mock_hotels:
+        mock_hotels.ainvoke = AsyncMock(return_value=graph_module._HotelsOnly(hotels=[]))
+        result = await format_node(state)
+
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert [hotel.name for hotel in itinerary.hotels] == ["Stay"]
 
 
-def _with_sections(base: Itinerary, flights: list[FlightOption], hotels: list[HotelOption]) -> Itinerary:
-    return base.model_copy(update={"flights": flights, "hotels": hotels})
+async def test_format_node_flights_scope_formats_only_flights_section() -> None:
+    previous = _make_multi_day_itinerary(3, 3).model_copy(
+        update={"flights": [_make_flight("Old Air")], "hotels": [_make_hotel("Stay")]}
+    )
+    flights_only = graph_module._FlightsOnly(flights=[_make_flight("New Air")])
+    state = _make_state([AIMessage(content="Swapped the flight.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.FLIGHTS
+
+    with (
+        patch("trip_planner.agents.graph._llm_flights_only") as mock_flights,
+        patch("trip_planner.agents.graph._llm_structured") as mock_full,
+    ):
+        mock_flights.ainvoke = AsyncMock(return_value=flights_only)
+        result = await format_node(state)
+
+    mock_full.ainvoke.assert_not_called()
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert len(itinerary.days) == 3
+    assert [flight.airline for flight in itinerary.flights] == ["New Air"]
+    assert [hotel.name for hotel in itinerary.hotels] == ["Stay"]
 
 
-def test_merge_itinerary_full_scope_replaces_everything() -> None:
-    previous = _with_sections(_make_itinerary(), [_make_flight()], [_make_hotel("Old")])
-    new = _with_sections(_make_multi_day_itinerary(2, 2), [], [_make_hotel("New")])
+async def test_format_node_flights_scope_dedupes_and_falls_back_when_empty() -> None:
+    previous = _make_itinerary().model_copy(update={"flights": [_make_flight("Old Air")]})
+    duplicate_flight = _make_flight("New Air")
+    state = _make_state([AIMessage(content="Swapped the flight.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.FLIGHTS
 
-    merged = _merge_itinerary(previous, new, UpdateScope.FULL)
+    with patch("trip_planner.agents.graph._llm_flights_only") as mock_flights:
+        mock_flights.ainvoke = AsyncMock(
+            return_value=graph_module._FlightsOnly(flights=[duplicate_flight, duplicate_flight])
+        )
+        result = await format_node(state)
 
-    assert merged is new
-
-
-def test_merge_itinerary_none_previous_returns_new() -> None:
-    new = _make_itinerary()
-
-    merged = _merge_itinerary(None, new, UpdateScope.HOTELS)
-
-    assert merged is new
-
-
-def test_merge_itinerary_hotels_scope_keeps_previous_days_and_flights() -> None:
-    previous = _with_sections(_make_multi_day_itinerary(3, 3), [_make_flight()], [_make_hotel("Old")])
-    new = _with_sections(_make_multi_day_itinerary(1, 3), [], [_make_hotel("New")])
-
-    merged = _merge_itinerary(previous, new, UpdateScope.HOTELS)
-
-    assert len(merged.days) == 3
-    assert [hotel.name for hotel in merged.hotels] == ["New"]
-    assert [flight.airline for flight in merged.flights] == ["British Airways"]
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert [flight.airline for flight in itinerary.flights] == ["New Air"]
 
 
-def test_merge_itinerary_flights_scope_keeps_previous_days_and_hotels() -> None:
-    previous = _with_sections(_make_multi_day_itinerary(3, 3), [_make_flight("Old Air")], [_make_hotel("Stay")])
-    new = _with_sections(_make_multi_day_itinerary(1, 3), [_make_flight("New Air")], [])
+async def test_format_node_itinerary_scope_formats_only_days_section() -> None:
+    previous = _make_multi_day_itinerary(3, 3).model_copy(
+        update={"flights": [_make_flight()], "hotels": [_make_hotel("Stay")]}
+    )
+    new_days = _make_multi_day_itinerary(2, 2)
+    days_only = graph_module._DaysOnly(total_days=2, days=new_days.days)
+    state = _make_state([AIMessage(content="Shorten the trip.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.ITINERARY
 
-    merged = _merge_itinerary(previous, new, UpdateScope.FLIGHTS)
+    with (
+        patch("trip_planner.agents.graph._llm_days_only") as mock_days,
+        patch("trip_planner.agents.graph._llm_structured") as mock_full,
+    ):
+        mock_days.ainvoke = AsyncMock(return_value=days_only)
+        result = await format_node(state)
 
-    assert len(merged.days) == 3
-    assert [flight.airline for flight in merged.flights] == ["New Air"]
-    assert [hotel.name for hotel in merged.hotels] == ["Stay"]
-
-
-def test_merge_itinerary_itinerary_scope_keeps_previous_flights_and_hotels() -> None:
-    previous = _with_sections(_make_multi_day_itinerary(3, 3), [_make_flight()], [_make_hotel("Stay")])
-    new = _with_sections(_make_multi_day_itinerary(3, 3), [], [])
-
-    merged = _merge_itinerary(previous, new, UpdateScope.ITINERARY)
-
-    assert merged.days is new.days
-    assert [flight.airline for flight in merged.flights] == ["British Airways"]
-    assert [hotel.name for hotel in merged.hotels] == ["Stay"]
+    mock_full.ainvoke.assert_not_called()
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert itinerary.total_days == 2
+    assert len(itinerary.days) == 2
+    assert [flight.airline for flight in itinerary.flights] == ["British Airways"]
+    assert [hotel.name for hotel in itinerary.hotels] == ["Stay"]
 
 
-def test_merge_itinerary_empty_new_section_falls_back_to_previous() -> None:
-    previous = _with_sections(_make_itinerary(), [_make_flight()], [_make_hotel("Stay")])
-    new = _with_sections(_make_itinerary(), [], [])
+async def test_format_node_itinerary_scope_retries_until_all_days_present() -> None:
+    previous = _make_itinerary()
+    short = graph_module._DaysOnly(total_days=3, days=_make_multi_day_itinerary(1, 3).days)
+    full = graph_module._DaysOnly(total_days=3, days=_make_multi_day_itinerary(3, 3).days)
+    state = _make_state([AIMessage(content="Extend the trip.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.ITINERARY
 
-    merged = _merge_itinerary(previous, new, UpdateScope.HOTELS)
+    with patch("trip_planner.agents.graph._llm_days_only") as mock_days:
+        mock_days.ainvoke = AsyncMock(side_effect=[short, full])
+        result = await format_node(state)
 
-    assert [hotel.name for hotel in merged.hotels] == ["Stay"]
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert len(itinerary.days) == 3
+    assert mock_days.ainvoke.await_count == 2
+
+
+async def test_format_node_itinerary_scope_falls_back_to_previous_when_empty() -> None:
+    previous = _make_itinerary()
+    state = _make_state([AIMessage(content="Change the plan.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.ITINERARY
+
+    with patch("trip_planner.agents.graph._llm_days_only") as mock_days:
+        mock_days.ainvoke = AsyncMock(return_value=graph_module._DaysOnly(total_days=0, days=[]))
+        result = await format_node(state)
+
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert itinerary.days == previous.days
 
 
 # --- _route_after_triage ---

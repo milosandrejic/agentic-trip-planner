@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, SecretStr
 from trip_planner.agents.state import TripPlannerState, UpdateScope
 from trip_planner.config import get_settings
 from trip_planner.schemas.clarification import ClarificationRequest
-from trip_planner.schemas.trips import FlightOption, Itinerary
+from trip_planner.schemas.trips import DayPlan, FlightOption, HotelOption, Itinerary
 from trip_planner.services.types import ToolResult
 from trip_planner.tools.discover_places import discover_places_tool
 from trip_planner.tools.find_place_by_name import find_place_by_name_tool
@@ -102,6 +102,30 @@ _FORMAT_PROMPT = (
     "Do not truncate or summarise days — output the full itinerary."
 )
 
+# Section-only prompts back the partial-regeneration path: a scoped follow-up (hotels, flights,
+# or the day plan) only asks the model to extract the section it touched, instead of the whole
+# trip, so unrelated sections are never at risk of silently changing.
+_HOTELS_FORMAT_PROMPT = (
+    "Based on the trip planning conversation above, extract ONLY the hotel options returned by "
+    "the hotel_search tool. Populate the hotels field with every hotel option found; do not invent "
+    "hotels the tool did not return."
+)
+
+_FLIGHTS_FORMAT_PROMPT = (
+    "Based on the trip planning conversation above, extract ONLY the flight options returned by "
+    "the flight_search tool. Populate the flights field with every flight option found; do not "
+    "invent flights the tool did not return."
+)
+
+_DAYS_FORMAT_PROMPT = (
+    "Based on the trip planning conversation above, produce ONLY the day-by-day plan. "
+    "You MUST include every single day — if the trip is N days, output exactly N DayPlan entries. "
+    "For each day include at least 3 activities. Include weather summaries where the weather tool "
+    "provided data. For each activity, populate the place fields (place_id, latitude, longitude, "
+    "address, rating, opening_hours, price_level, ticket_url) whenever the places tools provided "
+    "that data. Do not truncate or summarise days — output the full day-by-day plan."
+)
+
 _settings = get_settings()
 
 _REASONING_TEMPERATURE = 0.7
@@ -140,6 +164,30 @@ _format_llm = _build_llm(_DETERMINISTIC_TEMPERATURE, model=_settings.itinerary_m
 
 _llm_with_tools = _reasoning_llm.bind_tools(_TOOLS)
 _llm_structured = _format_llm.with_structured_output(Itinerary)
+
+
+class _HotelsOnly(BaseModel):
+    hotels: list[HotelOption] = Field(
+        default_factory=lambda: [], description="Top hotel options found for this trip."
+    )
+
+
+class _FlightsOnly(BaseModel):
+    flights: list[FlightOption] = Field(
+        default_factory=lambda: [], description="Top flight options found for this trip."
+    )
+
+
+class _DaysOnly(BaseModel):
+    total_days: int
+    days: list[DayPlan]
+
+
+# Section-only structured outputs back the partial-regeneration path (see format_node): a scoped
+# follow-up only pays for the section it changed instead of the full itinerary.
+_llm_hotels_only = _format_llm.with_structured_output(_HotelsOnly)
+_llm_flights_only = _format_llm.with_structured_output(_FlightsOnly)
+_llm_days_only = _format_llm.with_structured_output(_DaysOnly)
 
 
 class _TriageIntent(str, Enum):
@@ -406,40 +454,73 @@ async def _format_complete_itinerary(messages: list[BaseMessage]) -> Itinerary:
     return itinerary
 
 
-def _merge_itinerary(
-    previous: Itinerary | None, new: Itinerary, scope: UpdateScope
-) -> Itinerary:
-    """Splice a scoped follow-up change into the previous itinerary.
+async def _format_complete_days(messages: list[BaseMessage]) -> _DaysOnly:
+    """Generate the day-by-day plan, retrying with a reminder until every requested day is present.
 
-    A follow-up that only touches flights, hotels, or the day plan must leave the other sections
-    exactly as they were, instead of regenerating (and silently changing) the whole trip. Empty
-    new sections fall back to the previous ones so a failed re-search never wipes existing data.
+    Mirrors _format_complete_itinerary's completeness retry, but for the days-only section used
+    by a scoped itinerary follow-up.
     """
-    if previous is None or scope is UpdateScope.FULL:
-        return new
+    result = cast(_DaysOnly, await _llm_days_only.ainvoke(messages))
+
+    for _ in range(_MAX_FORMAT_ATTEMPTS - 1):
+        if len(result.days) >= result.total_days:
+            break
+        reminder = _completeness_reminder(result.total_days, len(result.days))
+        candidate = cast(_DaysOnly, await _llm_days_only.ainvoke([*messages, reminder]))
+        if len(candidate.days) > len(result.days):
+            result = candidate
+
+    return result
+
+
+async def _format_scoped_section(
+    messages: list[BaseMessage], previous: Itinerary, scope: UpdateScope
+) -> Itinerary:
+    """Generate and splice only the section a scoped follow-up targeted.
+
+    Only the affected section is sent to the LLM, instead of the whole itinerary, cutting tokens
+    and guaranteeing the untouched sections are byte-identical to the previous turn.
+    """
+    if scope is UpdateScope.HOTELS:
+        hotels_only = cast(
+            _HotelsOnly, await _llm_hotels_only.ainvoke([*messages, SystemMessage(content=_HOTELS_FORMAT_PROMPT)])
+        )
+        return previous.model_copy(update={"hotels": hotels_only.hotels or previous.hotels})
 
     if scope is UpdateScope.FLIGHTS:
-        return previous.model_copy(update={"flights": new.flights or previous.flights})
+        flights_only = cast(
+            _FlightsOnly,
+            await _llm_flights_only.ainvoke([*messages, SystemMessage(content=_FLIGHTS_FORMAT_PROMPT)]),
+        )
+        flights = _dedupe_flights(flights_only.flights) if flights_only.flights else previous.flights
+        return previous.model_copy(update={"flights": flights})
 
-    if scope is UpdateScope.HOTELS:
-        return previous.model_copy(update={"hotels": new.hotels or previous.hotels})
-
-    # UpdateScope.ITINERARY: take the new day-by-day plan but keep the chosen flights and hotels.
-    return new.model_copy(update={"flights": previous.flights, "hotels": previous.hotels})
+    # UpdateScope.ITINERARY: regenerate only the day-by-day plan, keeping flights and hotels as-is.
+    days_only = await _format_complete_days([*messages, SystemMessage(content=_DAYS_FORMAT_PROMPT)])
+    if not days_only.days:
+        return previous
+    return previous.model_copy(update={"days": days_only.days, "total_days": days_only.total_days})
 
 
 async def format_node(state: TripPlannerState) -> TripPlannerState:
-    """Force the conversation into a structured Itinerary via with_structured_output."""
-    format_instruction = SystemMessage(content=_FORMAT_PROMPT)
+    """Produce this turn's itinerary.
+
+    A brand-new trip (or a change touching several sections) formats the whole itinerary. A
+    scoped follow-up on an existing itinerary instead formats and splices only the section the
+    user asked to change (see _format_scoped_section), leaving the rest exactly as it was.
+    """
     conversation = list(state["messages"])
     structured_messages = _with_structured_tool_results(conversation)
-    messages_with_instruction = structured_messages + [format_instruction]
-
-    itinerary = await _format_complete_itinerary(messages_with_instruction)
-    itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
 
     scope = state.get("update_scope", UpdateScope.FULL)
-    itinerary = _merge_itinerary(state.get("previous_itinerary"), itinerary, scope)
+    previous = state.get("previous_itinerary")
+
+    if previous is not None and scope is not UpdateScope.FULL:
+        itinerary = await _format_scoped_section(structured_messages, previous, scope)
+    else:
+        messages_with_instruction = structured_messages + [SystemMessage(content=_FORMAT_PROMPT)]
+        itinerary = await _format_complete_itinerary(messages_with_instruction)
+        itinerary = itinerary.model_copy(update={"flights": _dedupe_flights(itinerary.flights)})
 
     return TripPlannerState(
         messages=[],
