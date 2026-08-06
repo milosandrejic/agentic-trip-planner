@@ -154,12 +154,18 @@ def test_places_result_preserves_metadata() -> None:
         longitude=2.3376,
         rating=4.7,
         opening_hours=["Monday: 9 AM - 6 PM"],
+        business_status="OPERATIONAL",
+        editorial_summary="A former royal palace turned world-famous art museum.",
+        google_maps_url="https://maps.google.com/?cid=123",
     )
     payload = PlacesResult(query="museums in Paris", places=[place])
 
     assert payload.places[0].place_id == "ChIJ123"
     assert payload.places[0].opening_hours == ["Monday: 9 AM - 6 PM"]
     assert payload.places[0].website_url is None
+    assert payload.places[0].business_status == "OPERATIONAL"
+    assert payload.places[0].editorial_summary is not None
+    assert payload.places[0].google_maps_url == "https://maps.google.com/?cid=123"
 
 
 def test_payloads_default_collections_to_empty_lists() -> None:

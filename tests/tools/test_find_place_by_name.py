@@ -69,6 +69,17 @@ async def test_find_place_by_name_tool_returns_formatted_string_on_success() -> 
     assert "ChIJLU7jZClu5kcR4PcOOO6p3I0" in result
 
 
+async def test_find_place_by_name_tool_ranks_best_name_match_first() -> None:
+    with patch(_PATCH_SEARCH, new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = [_EIFFEL_TOWER_RESTAURANT, _EIFFEL_TOWER]
+
+        message = await find_place_by_name_tool.ainvoke(_tool_call({"query": "Eiffel Tower"}))
+
+    result = message.artifact
+    assert result.data is not None
+    assert result.data.places[0].name == "Eiffel Tower"
+
+
 async def test_find_place_by_name_tool_returns_no_places_when_empty() -> None:
     with patch(_PATCH_SEARCH, new_callable=AsyncMock) as mock_search:
         mock_search.return_value = []

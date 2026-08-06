@@ -55,6 +55,7 @@ def _build_place_payload(place: ProviderPlace) -> PlaceResult:
     return PlaceResult(
         name=place.name,
         place_id=place.place_id,
+        categories=place.types,
         address=place.address,
         latitude=place.latitude,
         longitude=place.longitude,
@@ -64,6 +65,9 @@ def _build_place_payload(place: ProviderPlace) -> PlaceResult:
         opening_hours=place.opening_hours,
         website_url=place.website_url,
         phone=place.phone,
+        business_status=place.business_status,
+        editorial_summary=place.editorial_summary,
+        google_maps_url=place.google_maps_url,
     )
 
 

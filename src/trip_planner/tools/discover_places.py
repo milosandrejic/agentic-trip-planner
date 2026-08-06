@@ -13,6 +13,7 @@ from trip_planner.services.places import (
     PlaceProvider,
     PlaceSearchQuery,
     ProviderPlace,
+    rank_by_quality,
 )
 from trip_planner.services.types import PlaceResult, PlacesResult, ToolResult
 
@@ -126,6 +127,9 @@ def _to_place_result(place: ProviderPlace) -> PlaceResult:
         opening_hours=place.opening_hours,
         website_url=place.website_url,
         phone=place.phone,
+        business_status=place.business_status,
+        editorial_summary=place.editorial_summary,
+        google_maps_url=place.google_maps_url,
     )
 
 
@@ -156,6 +160,9 @@ async def discover_places_tool(
         places = await _provider.search_places(
             PlaceSearchQuery(text_query=query_text, max_results=limit)
         )
+        # Google does not guarantee its default ordering reflects quality, so pick the
+        # highest-confidence places (open, well-rated, well-reviewed) rather than the first ones.
+        places = rank_by_quality(places)
     except GooglePlacesError as exc:
         content = f"Places search unavailable: {exc.detail}"
         result: ToolResult[PlacesResult] = ToolResult[PlacesResult].fail(

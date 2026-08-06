@@ -5,6 +5,7 @@ from trip_planner.services.places.provider import (
     PlaceSearchQuery,
     ProviderPlace,
 )
+from trip_planner.services.places.ranking import rank_by_name_match, rank_by_quality
 
 __all__ = [
     "GooglePlacesProvider",
@@ -12,4 +13,6 @@ __all__ = [
     "PlaceProvider",
     "PlaceSearchQuery",
     "ProviderPlace",
+    "rank_by_name_match",
+    "rank_by_quality",
 ]

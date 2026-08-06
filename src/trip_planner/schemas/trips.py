@@ -55,6 +55,7 @@ class Activity(BaseModel):
     longitude: float | None = Field(default=None, description="Longitude of the place.")
     address: str | None = Field(default=None, description="Formatted address of the place.")
     rating: float | None = Field(default=None, description="Rating out of 5, if available.")
+    user_rating_count: int | None = Field(default=None, description="Number of ratings, if available.")
     opening_hours: list[str] = Field(
         default_factory=lambda: [],
         description="Weekday opening-hours descriptions, if available.",
@@ -65,6 +66,18 @@ class Activity(BaseModel):
     price_eur: float | None = Field(default=None, description="Approximate entry/ticket price in EUR.")
     ticket_url: str | None = Field(default=None, description="Booking or ticket URL, if available.")
     photo_url: str | None = Field(default=None, description="Representative photo URL, if available.")
+    website_url: str | None = Field(default=None, description="Official website URL, if available.")
+    phone: str | None = Field(default=None, description="Contact phone number, if available.")
+    business_status: str | None = Field(
+        default=None, description="e.g. 'OPERATIONAL', 'CLOSED_TEMPORARILY', if available."
+    )
+    categories: list[str] = Field(
+        default_factory=lambda: [], description="Place types/categories, if available."
+    )
+    editorial_summary: str | None = Field(
+        default=None, description="A short editorial description of the place, if available."
+    )
+    google_maps_url: str | None = Field(default=None, description="Google Maps URL, if available.")
     sources: list[Source] = Field(default_factory=lambda: [])
 
     @field_validator("id", mode="before")

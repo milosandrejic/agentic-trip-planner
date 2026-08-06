@@ -199,6 +199,9 @@ class PlaceResult(BaseModel):
     opening_hours: list[str] = Field(default_factory=lambda: [])
     website_url: str | None = None
     phone: str | None = None
+    business_status: str | None = None
+    editorial_summary: str | None = None
+    google_maps_url: str | None = None
 
 
 class PlacesResult(BaseModel):

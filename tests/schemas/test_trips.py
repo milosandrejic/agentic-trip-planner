@@ -14,6 +14,41 @@ def _activity(sources: list[Source]) -> Activity:
     return Activity(time="09:00", description="Visit", sources=sources)
 
 
+# --- rich place metadata (Commit 3) ---
+
+
+def test_activity_rich_place_fields_default_to_empty() -> None:
+    activity = Activity(time="09:00", description="Visit")
+
+    assert activity.user_rating_count is None
+    assert activity.website_url is None
+    assert activity.phone is None
+    assert activity.business_status is None
+    assert activity.categories == []
+    assert activity.editorial_summary is None
+    assert activity.google_maps_url is None
+
+
+def test_activity_preserves_rich_place_fields_when_supplied() -> None:
+    activity = Activity(
+        time="09:00",
+        description="Visit the Louvre",
+        user_rating_count=320000,
+        website_url="https://www.louvre.fr/",
+        phone="+33 1 40 20 50 50",
+        business_status="OPERATIONAL",
+        categories=["museum", "tourist_attraction"],
+        editorial_summary="A former royal palace turned world-famous art museum.",
+        google_maps_url="https://maps.google.com/?cid=123",
+    )
+
+    assert activity.user_rating_count == 320000
+    assert activity.website_url == "https://www.louvre.fr/"
+    assert activity.business_status == "OPERATIONAL"
+    assert activity.categories == ["museum", "tourist_attraction"]
+    assert activity.google_maps_url == "https://maps.google.com/?cid=123"
+
+
 # --- numeric prices (item 7) ---
 
 

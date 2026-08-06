@@ -17,6 +17,10 @@ _LOUVRE = ProviderPlace(
     website_url="https://www.louvre.fr/",
     phone="+33 1 40 20 50 50",
     opening_hours=["Monday: 9:00 AM – 6:00 PM", "Tuesday: Closed"],
+    business_status="OPERATIONAL",
+    types=["museum", "tourist_attraction"],
+    editorial_summary="A former royal palace turned world-famous art museum.",
+    google_maps_url="https://maps.google.com/?cid=123",
 )
 
 _PATCH_DETAILS = "trip_planner.tools.place_details._provider.get_place_details"
@@ -104,6 +108,20 @@ async def test_place_details_tool_success_envelope_carries_typed_place() -> None
     assert result.latency_ms is not None
     assert result.data is not None
     assert result.data.name == "Louvre Museum"
+
+
+async def test_place_details_tool_envelope_carries_rich_metadata() -> None:
+    with patch(_PATCH_DETAILS, new_callable=AsyncMock) as mock_details:
+        mock_details.return_value = _LOUVRE
+
+        message = await place_details_tool.ainvoke(_tool_call({"place_id": "ChIJ123"}))
+
+    place = message.artifact.data
+    assert place is not None
+    assert place.business_status == "OPERATIONAL"
+    assert place.categories == ["museum", "tourist_attraction"]
+    assert place.editorial_summary is not None
+    assert place.google_maps_url == "https://maps.google.com/?cid=123"
 
 
 async def test_place_details_tool_error_envelope_is_retryable_on_provider_error() -> None:

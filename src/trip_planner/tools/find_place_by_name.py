@@ -10,6 +10,7 @@ from trip_planner.services.places import (
     PlaceProvider,
     PlaceSearchQuery,
     ProviderPlace,
+    rank_by_name_match,
 )
 from trip_planner.services.types import PlaceResult, PlacesResult, ToolResult
 
@@ -58,6 +59,7 @@ def _to_place_result(place: ProviderPlace) -> PlaceResult:
     return PlaceResult(
         name=place.name,
         place_id=place.place_id,
+        categories=place.types,
         address=place.address,
         latitude=place.latitude,
         longitude=place.longitude,
@@ -67,6 +69,9 @@ def _to_place_result(place: ProviderPlace) -> PlaceResult:
         opening_hours=place.opening_hours,
         website_url=place.website_url,
         phone=place.phone,
+        business_status=place.business_status,
+        editorial_summary=place.editorial_summary,
+        google_maps_url=place.google_maps_url,
     )
 
 
@@ -91,6 +96,9 @@ async def find_place_by_name_tool(
         places = await _provider.search_places(
             PlaceSearchQuery(text_query=query, max_results=max_results)
         )
+        # Text Search does not guarantee the best name match comes first, so re-rank instead of
+        # trusting Google's default ordering.
+        places = rank_by_name_match(places, query)
     except GooglePlacesError as exc:
         content = f"Place lookup unavailable: {exc.detail}"
         result: ToolResult[PlacesResult] = ToolResult[PlacesResult].fail(

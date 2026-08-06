@@ -84,7 +84,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Use the hotel_search tool to find accommodation when the user provides a destination and travel dates. "
     "Pass the destination city name and its ISO 3166-1 alpha-2 country code (e.g. Paris → FR, Tokyo → JP). "
     "Use the discover_places tool to discover points of interest (attractions, restaurants, museums) in the "
-    "destination via Geoapify category keys (e.g. 'tourism.sights', 'catering.restaurant', 'entertainment.museum'). "
+    "destination via free-text categories (e.g. 'tourist attractions', 'restaurants', 'museums'). "
     "Use the find_place_by_name tool to resolve a specific named place to its Google place_id. "
     "Use the place_details tool with that place_id to fetch rich details (rating, opening hours, price level, "
     "website) for your top picks only, since each detail lookup is a paid call. "
@@ -100,7 +100,9 @@ _FORMAT_PROMPT = (
     "Populate the flights field with every flight option returned by the flight_search tool. "
     "Populate the hotels field with every hotel option returned by the hotel_search tool. "
     "For each activity, populate the place fields (place_id, latitude, longitude, address, rating, "
-    "opening_hours, price_level, ticket_url) whenever the places tools provided that data. "
+    "user_rating_count, opening_hours, price_level, ticket_url, website_url, phone, business_status, "
+    "categories, editorial_summary, google_maps_url) whenever the places tools provided that data; "
+    "never invent a value the tools did not return, leave it null instead. "
     "Include all sources discussed. "
     "Do not truncate or summarise days — output the full itinerary. "
     "The summary field must describe the trip itself (destination highlights, pace, what the days "
@@ -128,8 +130,10 @@ _DAYS_FORMAT_PROMPT = (
     "You MUST include every single day — if the trip is N days, output exactly N DayPlan entries. "
     "For each day include at least 3 activities. Include weather summaries where the weather tool "
     "provided data. For each activity, populate the place fields (place_id, latitude, longitude, "
-    "address, rating, opening_hours, price_level, ticket_url) whenever the places tools provided "
-    "that data. Do not truncate or summarise days — output the full day-by-day plan."
+    "address, rating, user_rating_count, opening_hours, price_level, ticket_url, website_url, phone, "
+    "business_status, categories, editorial_summary, google_maps_url) whenever the places tools "
+    "provided that data; never invent a value the tools did not return, leave it null instead. "
+    "Do not truncate or summarise days — output the full day-by-day plan."
 )
 
 _settings = get_settings()

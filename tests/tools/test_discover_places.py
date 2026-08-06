@@ -148,6 +148,22 @@ async def test_discover_places_tool_returns_formatted_string_on_success() -> Non
     assert "Musée d'Orsay" in result
 
 
+async def test_discover_places_tool_ranks_closed_places_below_operational_ones() -> None:
+    closed = _LOUVRE.model_copy(update={"rating": 4.9, "business_status": "CLOSED_PERMANENTLY"})
+    operational = _ORSAY.model_copy(update={"rating": 3.0, "business_status": "OPERATIONAL"})
+
+    with patch(_PATCH_SEARCH, new_callable=AsyncMock) as mock_search:
+        mock_search.return_value = [closed, operational]
+
+        message = await discover_places_tool.ainvoke(
+            _tool_call({"city": "Paris", "categories": "museums"})
+        )
+
+    result = message.artifact
+    assert result.data is not None
+    assert result.data.places[0].name == "Musée d'Orsay"
+
+
 async def test_discover_places_tool_returns_error_string_on_provider_error() -> None:
     with patch(_PATCH_SEARCH, new_callable=AsyncMock) as mock_search:
         mock_search.side_effect = GooglePlacesError(429, "rate limited")
