@@ -68,8 +68,12 @@ _TRIAGE_PROMPT_TEMPLATE = (
     "Otherwise set should_clarify=false and leave clarification as null. "
     "For an itinerary_modification, also set update_scope to the narrowest section the user wants "
     "changed: 'flights' when only flights change, 'hotels' when only hotels change, 'itinerary' when "
-    "only the day-by-day plan (days or activities) changes. Use 'full' for a brand-new trip or a "
-    "change that touches several sections at once. For every other intent, leave update_scope as 'full'. "
+    "only the day-by-day plan (days or activities) changes — this includes replacing or swapping a "
+    "day trip's destination (e.g. 'do Tivoli instead of Florence'), adding or removing an activity, or "
+    "reordering days; these stay 'itinerary' scope even though they change several activities within a "
+    "day, since flights and hotels are unaffected. Use 'full' for a brand-new trip or a change that "
+    "touches several sections at once (e.g. flights or hotels together with the day plan). For every "
+    "other intent, leave update_scope as 'full'. "
     "Also extract hotel_max_nightly_price and hotel_min_star_rating whenever the user's message implies "
     "a hotel price or quality constraint, whether for a new trip or a modification. Look back through "
     "the conversation's prior hotel search results for concrete prices to ground a relative request "
@@ -97,6 +101,20 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Ask clarifying questions if the request is too vague to plan well."
 )
 
+# The conversation is never trimmed between turns, so a later message that replaces or removes a
+# destination, day trip, or activity still has the earlier tool results and plan for it sitting in
+# history. Both format prompts below repeat this instruction so neither a full nor a scoped
+# regeneration can partially blend the old entity back in.
+_NO_STALE_ENTITIES_INSTRUCTION = (
+    "The conversation may contain earlier tool results or plans for a destination, day trip, or "
+    "activity that a later message replaced, removed, or swapped for something else — always follow "
+    "the user's MOST RECENT instruction. When a destination, day trip, or activity is replaced, fully "
+    "regenerate the affected day from scratch: never keep, merge, or reference any activities, "
+    "restaurants, descriptions, or place details tied to what was replaced, even though they still "
+    "appear earlier in the conversation. No trace of a replaced destination or activity may remain "
+    "anywhere in the itinerary, including in other days, the summary, or any entity's description."
+)
+
 _FORMAT_PROMPT = (
     "Based on the trip planning conversation above, produce a complete structured itinerary. "
     "You MUST include every single day — if the user asked for 3 days, the itinerary must have exactly 3 DayPlan entries. "
@@ -114,7 +132,8 @@ _FORMAT_PROMPT = (
     "Do not truncate or summarise days — output the full itinerary. "
     "The summary field must describe the trip itself (destination highlights, pace, what the days "
     "cover) in 2-4 sentences. Never mention prices, tool or provider names, or search/API details in "
-    "the summary — that information belongs only in the flights and hotels fields."
+    "the summary — that information belongs only in the flights and hotels fields. "
+    + _NO_STALE_ENTITIES_INSTRUCTION
 )
 
 # Section-only prompts back the partial-regeneration path: a scoped follow-up (hotels, flights,
@@ -144,7 +163,11 @@ _DAYS_FORMAT_PROMPT = (
     "provided that data; never invent a value the tools did not return, leave it null instead. "
     "Attach each activity's own sources field whenever one is identifiable; leave it empty rather "
     "than guessing. "
-    "Do not truncate or summarise days — output the full day-by-day plan."
+    "Also produce an updated summary field describing the trip itself (destination highlights, pace, "
+    "what the days cover) in 2-4 sentences, consistent with the day-by-day plan you just produced. "
+    "Never mention prices, tool or provider names, or search/API details in the summary. "
+    "Do not truncate or summarise days — output the full day-by-day plan. "
+    + _NO_STALE_ENTITIES_INSTRUCTION
 )
 
 _settings = get_settings()
@@ -202,6 +225,9 @@ class _FlightsOnly(BaseModel):
 class _DaysOnly(BaseModel):
     total_days: int
     days: list[DayPlan]
+    summary: str = Field(
+        description="Updated trip summary, consistent with the regenerated day-by-day plan."
+    )
 
 
 # Section-only structured outputs back the partial-regeneration path (see format_node): a scoped
@@ -566,11 +592,15 @@ async def _format_scoped_section(
         flights = _dedupe_flights(flights_only.flights) if flights_only.flights else previous.flights
         return previous.model_copy(update={"flights": flights})
 
-    # UpdateScope.ITINERARY: regenerate only the day-by-day plan, keeping flights and hotels as-is.
+    # UpdateScope.ITINERARY: regenerate only the day-by-day plan (and its summary), keeping
+    # flights and hotels as-is.
     days_only = await _format_complete_days([*messages, SystemMessage(content=_DAYS_FORMAT_PROMPT)])
     if not days_only.days:
         return previous
-    return previous.model_copy(update={"days": days_only.days, "total_days": days_only.total_days})
+    summary = days_only.summary.strip() or previous.summary
+    return previous.model_copy(
+        update={"days": days_only.days, "total_days": days_only.total_days, "summary": summary}
+    )
 
 
 async def _enrich_itinerary_days(itinerary: Itinerary) -> Itinerary:

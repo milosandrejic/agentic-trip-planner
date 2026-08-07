@@ -505,7 +505,7 @@ async def test_format_node_itinerary_scope_formats_only_days_section() -> None:
         update={"flights": [_make_flight()], "hotels": [_make_hotel("Stay")]}
     )
     new_days = _make_multi_day_itinerary(2, 2)
-    days_only = graph_module._DaysOnly(total_days=2, days=new_days.days)
+    days_only = graph_module._DaysOnly(total_days=2, days=new_days.days, summary="A shorter trip.")
     state = _make_state([AIMessage(content="Shorten the trip.")])
     state["previous_itinerary"] = previous
     state["update_scope"] = UpdateScope.ITINERARY
@@ -522,14 +522,19 @@ async def test_format_node_itinerary_scope_formats_only_days_section() -> None:
     assert itinerary is not None
     assert itinerary.total_days == 2
     assert len(itinerary.days) == 2
+    assert itinerary.summary == "A shorter trip."
     assert [flight.airline for flight in itinerary.flights] == ["British Airways"]
     assert [hotel.name for hotel in itinerary.hotels] == ["Stay"]
 
 
 async def test_format_node_itinerary_scope_retries_until_all_days_present() -> None:
     previous = _make_itinerary()
-    short = graph_module._DaysOnly(total_days=3, days=_make_multi_day_itinerary(1, 3).days)
-    full = graph_module._DaysOnly(total_days=3, days=_make_multi_day_itinerary(3, 3).days)
+    short = graph_module._DaysOnly(
+        total_days=3, days=_make_multi_day_itinerary(1, 3).days, summary="An extended trip."
+    )
+    full = graph_module._DaysOnly(
+        total_days=3, days=_make_multi_day_itinerary(3, 3).days, summary="An extended trip."
+    )
     state = _make_state([AIMessage(content="Extend the trip.")])
     state["previous_itinerary"] = previous
     state["update_scope"] = UpdateScope.ITINERARY
@@ -551,12 +556,105 @@ async def test_format_node_itinerary_scope_falls_back_to_previous_when_empty() -
     state["update_scope"] = UpdateScope.ITINERARY
 
     with patch("trip_planner.agents.graph._llm_days_only") as mock_days:
-        mock_days.ainvoke = AsyncMock(return_value=graph_module._DaysOnly(total_days=0, days=[]))
+        mock_days.ainvoke = AsyncMock(
+            return_value=graph_module._DaysOnly(total_days=0, days=[], summary="")
+        )
         result = await format_node(state)
 
     itinerary = result.get("current_itinerary")
     assert itinerary is not None
     assert itinerary.days == previous.days
+
+
+# --- format_node destination replacement (day-trip swap) regression ---
+
+
+def _day_trip_itinerary(day_trip_location: str, day_trip_activities: list[str]) -> Itinerary:
+    """A 5-day Rome itinerary whose Day 4 is a day trip to the given location."""
+    days = [
+        DayPlan(
+            day=1, location="Rome", activities=[Activity(time="Morning", description="Colosseum tour")]
+        ),
+        DayPlan(
+            day=2, location="Rome", activities=[Activity(time="Morning", description="Vatican Museums")]
+        ),
+        DayPlan(
+            day=3, location="Rome", activities=[Activity(time="Evening", description="Trevi Fountain")]
+        ),
+        DayPlan(
+            day=4,
+            location=day_trip_location,
+            activities=[
+                Activity(time="Morning", description=description)
+                for description in day_trip_activities
+            ],
+        ),
+        DayPlan(
+            day=5, location="Rome", activities=[Activity(time="Morning", description="Return flight")]
+        ),
+    ]
+    return Itinerary(
+        destination="Rome",
+        total_days=5,
+        summary=f"A 5-day Rome trip including a day trip to {day_trip_location}.",
+        days=days,
+        hotels=[_make_hotel("Rome Central Hotel")],
+        flights=[_make_flight("British Airways")],
+    )
+
+
+def _all_text(itinerary: Itinerary) -> str:
+    """Concatenate every user-visible string field so a stale reference can't hide anywhere."""
+    parts = [itinerary.summary]
+    for day in itinerary.days:
+        parts.append(day.location)
+        for activity in day.activities:
+            parts.append(activity.description)
+    return " ".join(parts)
+
+
+async def test_format_node_itinerary_scope_fully_replaces_day_trip_destination() -> None:
+    """Regression test: replacing a day trip must regenerate that day and the summary together,
+    leaving no trace of the old destination anywhere in the itinerary (reported bug: Day 4 kept
+    showing Florence activities after asking to replace the Florence day trip with Tivoli)."""
+    previous = _day_trip_itinerary(
+        "Florence", ["Uffizi Gallery", "Ponte Vecchio", "Florence trattoria lunch"]
+    )
+    updated = _day_trip_itinerary(
+        "Tivoli", ["Villa d'Este", "Villa Adriana", "Tivoli lunch"]
+    )
+    state = _make_state([AIMessage(content="Replace the Florence day trip with Tivoli instead.")])
+    state["previous_itinerary"] = previous
+    state["update_scope"] = UpdateScope.ITINERARY
+
+    with patch("trip_planner.agents.graph._llm_days_only") as mock_days:
+        mock_days.ainvoke = AsyncMock(
+            return_value=graph_module._DaysOnly(
+                total_days=updated.total_days, days=updated.days, summary=updated.summary
+            )
+        )
+        result = await format_node(state)
+
+    itinerary = result.get("current_itinerary")
+    assert itinerary is not None
+    assert "Florence" not in _all_text(itinerary)
+    assert "Tivoli" in itinerary.summary
+    day_four = next(day for day in itinerary.days if day.day == 4)
+    assert day_four.location == "Tivoli"
+    activity_descriptions = [activity.description for activity in day_four.activities]
+    assert "Villa d'Este" in activity_descriptions
+    assert "Villa Adriana" in activity_descriptions
+    # Everything outside the replaced day/summary is untouched.
+    assert [flight.airline for flight in itinerary.flights] == ["British Airways"]
+    assert [hotel.name for hotel in itinerary.hotels] == ["Rome Central Hotel"]
+    other_days = [day for day in itinerary.days if day.day != 4]
+    assert [day.location for day in other_days] == ["Rome", "Rome", "Rome", "Rome"]
+
+
+def test_no_stale_entities_instruction_present_in_format_prompts() -> None:
+    """Guard the anti-stale-entity instruction against silent removal from either format prompt."""
+    assert graph_module._NO_STALE_ENTITIES_INSTRUCTION in graph_module._FORMAT_PROMPT
+    assert graph_module._NO_STALE_ENTITIES_INSTRUCTION in graph_module._DAYS_FORMAT_PROMPT
 
 
 # --- format_node place enrichment ---
@@ -585,7 +683,7 @@ async def test_format_node_full_scope_enriches_every_day() -> None:
 async def test_format_node_itinerary_scope_enriches_new_days() -> None:
     previous = _make_itinerary()
     new_days = _make_multi_day_itinerary(2, 2)
-    days_only = graph_module._DaysOnly(total_days=2, days=new_days.days)
+    days_only = graph_module._DaysOnly(total_days=2, days=new_days.days, summary="An extended trip.")
     state = _make_state([AIMessage(content="Extend the trip.")])
     state["previous_itinerary"] = previous
     state["update_scope"] = UpdateScope.ITINERARY
